@@ -15,6 +15,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, Signal
 
+from arctis_sound_manager.platform_support import IS_MACOS
+
 _CFG = Path.home() / ".config" / "arctis_manager"
 _STATE_FILE = _CFG / ".eq_mode"
 _CUSTOM_PRESETS_FILE = _CFG / "eq_presets.json"
@@ -28,6 +30,10 @@ SONAR_CHANNELS: list[tuple[str, str]] = [
     ("micro",  "Micro"),
     ("output", "Output"),
 ]
+if IS_MACOS:
+    # The soft EQ runs the Game curve on the Mac's sound and the Micro one
+    # on the microphone, and nothing else.
+    SONAR_CHANNELS = [ch for ch in SONAR_CHANNELS if ch[0] in ("game", "micro")]
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +127,23 @@ class SonarPresetApplier(QObject):
 
         macro = _load_macro(channel)
         _set_active_preset(channel, name)
+
+        if IS_MACOS:
+            from arctis_sound_manager.gui.sonar_page import (_apply_soft_eq, _apply_soft_mic,
+                                                             apply_preset_spatial_tuning)
+            if channel == "micro":
+                _apply_soft_mic(bands, macro.get("basses", 0.0), macro.get("voix", 0.0),
+                                macro.get("aigus", 0.0))
+            elif channel == "game":
+                # Its Spatial tuning, which the soft EQ reads with the curve.
+                try:
+                    apply_preset_spatial_tuning(channel, name)
+                except Exception as e:
+                    logger.warning("Spatial tuning for preset '%s' not applied: %s", name, e)
+                _apply_soft_eq(bands, macro.get("basses", 0.0), macro.get("voix", 0.0),
+                               macro.get("aigus", 0.0))
+            self.done.emit(channel in ("game", "micro"), channel, name)
+            return
 
         # The preset's Spatial tuning (its own, or the common one) follows it.
         try:

@@ -24,6 +24,7 @@ import threading
 from typing import Any, Callable
 
 from arctis_sound_manager.config import ChargingCaseConfig, DeviceConfiguration
+from arctis_sound_manager.platform_support import IS_MACOS
 
 CMD_BATTERY = 0xB7
 CMD_BUDS_IN_CASE = 0xB8
@@ -136,6 +137,10 @@ class ChargingCaseMonitor:
     def on_device_connected(self, vendor_id: int, product_id: int, product_name: str = '') -> None:
         case = self._case_for(vendor_id, product_id)
         if case is None or self._stopping:
+            return
+        if IS_MACOS:
+            # The case is read through a libusb claim, which macOS refuses.
+            self.logger.info("Charging case %04x:%04x is not supported on macOS", vendor_id, product_id)
             return
         with self._lock:
             if product_id in self._workers:

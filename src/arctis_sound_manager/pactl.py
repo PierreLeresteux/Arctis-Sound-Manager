@@ -8,7 +8,10 @@ import shutil
 import subprocess
 import time
 
-import pulsectl
+try:
+    import pulsectl
+except (ImportError, OSError):  # macOS: no PulseAudio/PipeWire to talk to
+    pulsectl = None
 
 from arctis_sound_manager.constants import (PULSE_AUX_NODE_NAME,
                                             PULSE_CHAT_NODE_NAME,
@@ -111,7 +114,7 @@ def _pid_matches(product_id_attr: str, product_id: 'int | list[int] | None') -> 
     lst = product_id if isinstance(product_id, list) else [product_id]
     return attr_int in lst
 
-class TypedPulseSinkInfo(pulsectl.PulseSinkInfo):
+class TypedPulseSinkInfo(pulsectl.PulseSinkInfo if pulsectl else object):
     name: str
 
 
@@ -137,6 +140,8 @@ class PulseAudioManager:
         self.pulse = self._connect_with_retry()
 
     def _connect_with_retry(self) -> 'pulsectl.Pulse':
+        if pulsectl is None:
+            raise RuntimeError('pulsectl is not available on this platform')
         delay = self._CONNECT_INITIAL_DELAY_S
         last_err: Exception | None = None
         for attempt in range(1, self._CONNECT_MAX_ATTEMPTS + 1):

@@ -19,6 +19,13 @@ from arctis_sound_manager.autostart import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _linux_backends(monkeypatch):
+    # These are the Linux backends; on macOS only launchd is offered
+    # (test_autostart_launchd.py).
+    monkeypatch.setattr(autostart_mod, "IS_MACOS", False)
+
+
 # ── detect_environment ─────────────────────────────────────────────────────────
 
 def test_detect_hyprland_via_env_signature(monkeypatch):

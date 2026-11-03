@@ -8,9 +8,17 @@ dependencies = [
     "babel>=2.13.0",
     "dbus-next>=0.2.3",
     "pillow>=10.0.0",
-    "pulsectl>=24.12.0",
-    "pyside6>=6.10.1",
-    "pyudev>=0.24.4",
+    "hidapi>=0.14.0; sys_platform == 'darwin'",
+    # The software equaliser on macOS (soft_eq.py): sample buffers and audio I/O.
+    "numpy>=1.26; sys_platform == 'darwin'",
+    "sounddevice>=0.5; sys_platform == 'darwin'",
+    "pulsectl>=24.12.0; sys_platform == 'linux'",
+    "pyside6>=6.10.1; sys_platform != 'darwin'",
+    # Qt 6.11.3 is the first that does not crash when the menu bar icon is
+    # clicked on macOS 27 (QCocoaSystemTrayIcon read clickCount off a
+    # non-mouse event).
+    "pyside6>=6.11.3; sys_platform == 'darwin'",
+    "pyudev>=0.24.4; sys_platform == 'linux'",
     "pyusb>=1.3.1",
     "ruamel-yaml>=0.19.1",
 ]
@@ -39,6 +47,7 @@ dev = [
 [tool.pytest.ini_options]
 markers = [
     "real_sysfs: exercises a real sysfs read, so the fixture that fakes usage pages stands aside",
+    "linux_only: holds only on Linux, skipped elsewhere (macOS runs headset control only)",
 ]
 
 [tool.pyright]

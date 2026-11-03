@@ -55,6 +55,79 @@ def _audio_tool(args, shell: bool) -> str | None:
     return None
 
 
+# Tests that only hold on Linux, skipped on macOS (see docs/macos.md). They
+# drive the libusb/hidraw path that macOS replaces with hidapi, need pulsectl
+# (Linux only), run the shell scripts under bash 4 features macOS's bash 3.2
+# lacks, or open unix sockets under paths longer than macOS allows.
+# Marking a test @pytest.mark.linux_only does the same.
+_LINUX_ONLY = frozenset({
+    "test_audio_only_device.py::test_kernel_detach_is_a_no_op",
+    "test_clip_audio_sources.py::test_a_pulse_failure_does_not_invent_sonar_monitors",
+    "test_clip_audio_sources.py::test_a_sink_outside_sonar_is_recorded_under_the_app_name",
+    "test_clip_audio_sources.py::test_idle_sonar_channels_still_get_a_track",
+    "test_clip_audio_sources.py::test_missing_sonar_channels_are_not_invented",
+    "test_clip_audio_sources.py::test_no_sonar_never_asks_for_monitors_that_do_not_exist",
+    "test_clip_audio_sources.py::test_no_sonar_records_the_system_output_once",
+    "test_clip_audio_sources.py::test_the_mic_is_its_own_track",
+    "test_clip_audio_sources.py::test_track_names_survive_an_application_name_with_punctuation",
+    "test_clip_audio_sources.py::test_two_sinks_running_the_same_app_do_not_collide",
+    "test_clip_feedback_and_game.py::test_a_blocked_app_on_the_game_channel_is_still_blocked",
+    "test_clip_feedback_and_game.py::test_a_browser_alone_is_still_not_a_game",
+    "test_clip_feedback_and_game.py::test_a_game_is_not_blocked_for_a_word_inside_a_longer_one",
+    "test_clip_feedback_and_game.py::test_a_video_player_on_the_game_channel_does_not_arm_the_capture",
+    "test_clip_feedback_and_game.py::test_an_unlisted_app_is_still_taken_as_the_game",
+    "test_clip_feedback_and_game.py::test_corked_and_sinkless_streams_do_not_count",
+    "test_clip_feedback_and_game.py::test_display_names_of_blocked_apps_are_blocked",
+    "test_clip_feedback_and_game.py::test_nothing_playing_is_not_a_guess",
+    "test_clip_feedback_and_game.py::test_order_does_not_decide_it",
+    "test_clip_feedback_and_game.py::test_strict_does_not_guess_from_an_unknown_app",
+    "test_clip_feedback_and_game.py::test_the_eq_input_counts_as_the_game_channel",
+    "test_clip_feedback_and_game.py::test_the_steam_client_is_not_a_game",
+    "test_clip_feedback_and_game.py::test_the_stream_on_the_game_channel_wins",
+    "test_clips_opt_in.py::test_cancelling_the_uninstall_changes_nothing",
+    "test_clips_opt_in.py::test_the_main_window_builds_with_clips_off",
+    "test_device_detection.py::test_kernel_detach_covers_all_interfaces",
+    "test_game_presets.py::test_client_fallback_finds_silent_game",
+    "test_game_presets.py::test_client_fallback_ignores_plain_apps",
+    "test_game_presets.py::test_client_fallback_launcher_env_without_runtime_hint",
+    "test_game_presets.py::test_game_stream_without_pid_takes_it_from_its_client",
+    "test_hidraw_transport.py::test_hidraw_choice_opens_the_nodes_and_detaches_nothing",
+    "test_hidraw_transport.py::test_hidraw_falls_back_to_libusb_without_a_command_node",
+    "test_hidraw_transport.py::test_rules_without_hidraw_skip_the_attempt",
+    "test_kernel_driver_diagnostics.py::TestBehaviourUnchanged::test_eacces_still_sets_permission_error_and_returns_false",
+    "test_oled_renderer.py::test_load_font_falls_back_on_old_pillow",
+    "test_pipeable_scripts.py::test_uninstaller_survives_being_piped_into_bash",
+    "test_preferred_device.py::test_configure_virtual_sinks_falls_back_and_logs_when_preferred_is_absent",
+    "test_preferred_device.py::test_configure_virtual_sinks_prefers_the_configured_device_regardless_of_order",
+    "test_preferred_device.py::test_configure_virtual_sinks_tolerates_missing_general_settings",
+    "test_preferred_device.py::test_configure_virtual_sinks_unchanged_when_no_preference",
+    "test_restart_user_services_sh.py::test_dinit_box_restarts_the_running_daemon",
+    "test_restart_user_services_sh.py::test_upgrade_asks_the_tray_to_restart_as_the_user",
+    "test_runtime_staleness.py::test_no_banner_when_nothing_changed",
+    "test_runtime_staleness.py::test_restart_request_reaches_a_listening_gui",
+    "test_single_instance_guard.py::test_command_is_readable_after_the_sender_has_gone",
+    "test_single_instance_guard.py::test_losing_the_race_hands_over_instead_of_evicting",
+    "test_single_instance_guard.py::test_plain_socket_restart_request_is_heard_by_qlocalserver",
+    "test_single_instance_guard.py::test_socket_left_by_a_killed_instance_is_taken_over",
+    "test_single_instance_guard.py::test_starting_instance_is_found_even_though_it_never_replies",
+    "test_single_instance_guard.py::test_starting_instance_keeps_its_socket",
+    "test_sonar_to_pipewire.py::test_ensure_filter_chain_healthy_enters_safe_mode_on_high_nrestarts",
+    "test_uninstall_service_safety.py::test_a_confirmed_removal_does_stop_the_services",
+    "test_uninstall_service_safety.py::test_no_terminal_means_nothing_is_stopped",
+})
+
+
+def pytest_collection_modifyitems(config, items):
+    import sys
+    if sys.platform.startswith("linux"):
+        return
+    skip = pytest.mark.skip(reason="Linux only")
+    for item in items:
+        test_id = item.nodeid.split("[", 1)[0].removeprefix("tests/")
+        if test_id in _LINUX_ONLY or item.get_closest_marker("linux_only"):
+            item.add_marker(skip)
+
+
 def pytest_configure(config):
     """Give the whole suite a throwaway HOME before any test module imports.
 

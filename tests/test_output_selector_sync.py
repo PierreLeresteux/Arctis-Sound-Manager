@@ -309,6 +309,8 @@ def _page_for_output(monkeypatch, current):
 
     from arctis_sound_manager.gui.sonar_page import SonarPage
 
+    # The Output channel's routing is PipeWire's (Linux).
+    monkeypatch.setattr("arctis_sound_manager.gui.sonar_page.AUDIO_SUPPORTED", True)
     page = SonarPage.__new__(SonarPage)
     page._output_widget = MagicMock()
     page._output_widget._target_override = current

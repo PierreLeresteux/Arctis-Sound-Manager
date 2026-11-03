@@ -173,10 +173,12 @@ def _single_instance_lock(logger):
     flock is used rather than a pid file: the kernel releases it when the
     process dies, however it dies, so there is no stale lock to reap.
     """
-    runtime_dir = os.environ.get('XDG_RUNTIME_DIR') or f'/tmp/arctis-{os.getuid()}'
+    from arctis_sound_manager.platform_support import IS_MACOS, daemon_lock_path
+    lock_path = daemon_lock_path()
+    runtime_dir = os.path.dirname(lock_path)
     try:
         os.makedirs(runtime_dir, exist_ok=True)
-        handle = open(os.path.join(runtime_dir, 'arctis-manager.lock'), 'w')
+        handle = open(lock_path, 'w')
     except OSError as exc:
         # No lock is worse than a lock, but refusing to start at all over an
         # unwritable runtime dir is worse still.
@@ -188,16 +190,28 @@ def _single_instance_lock(logger):
     except OSError:
         handle.close()
         from arctis_sound_manager.init_system import detect_init
-        stop_cmd = ('dinitctl stop arctis-manager' if detect_init() == 'dinit'
-                    else 'systemctl --user stop arctis-manager.service')
+        if IS_MACOS:
+            stop_cmd = 'launchctl bootout gui/$(id -u)/com.github.arctis-sound-manager.daemon'
+        elif detect_init() == 'dinit':
+            stop_cmd = 'dinitctl stop arctis-manager'
+        else:
+            stop_cmd = 'systemctl --user stop arctis-manager.service'
         logger.error(
             'Another asm-daemon already holds the runtime lock in %s — refusing '
             'to start, so this process does not tear down the running daemon\'s '
             'audio channels. Stop it with `%s` or `pkill -f asm-daemon` and retry.',
             runtime_dir, stop_cmd,
         )
-        sys.exit(1)
+        # On macOS, ASM.app and the LaunchAgent can both start one at login;
+        # a clean exit keeps launchd's KeepAlive from retrying the loser.
+        sys.exit(0 if IS_MACOS else 1)
 
+    # Who holds it, for platform_support.restart_daemon() to stop.
+    try:
+        handle.write(f'{os.getpid()}\n')
+        handle.flush()
+    except OSError as exc:
+        logger.debug('could not write the pid to the lock: %r', exc)
     # Kept open for the process's lifetime: closing the file drops the lock.
     return handle
 
@@ -241,33 +255,47 @@ async def main_async():
     # lost it, because the upgrade removed that file and nothing enabled its
     # replacement (#191). The GUI failing to start *is* the symptom, so this
     # cannot live there — the daemon is what still runs.
-    try:
-        from arctis_sound_manager.autostart import migrate_legacy_gui_autostart
-        migrate_legacy_gui_autostart()
-    except Exception as exc:
-        logger.warning('could not migrate the tray autostart unit: %r', exc)
+    from arctis_sound_manager.platform_support import AUDIO_SUPPORTED, IS_LINUX, IS_MACOS
+    if IS_LINUX:
+        try:
+            from arctis_sound_manager.autostart import migrate_legacy_gui_autostart
+            migrate_legacy_gui_autostart()
+        except Exception as exc:
+            logger.warning('could not migrate the tray autostart unit: %r', exc)
 
-    from arctis_sound_manager.udev_checker import is_udev_rules_valid
-    if not is_udev_rules_valid():
-        logger.warning('udev rules are missing or invalid — USB access may fail (errno 13). Run: sudo asm-cli udev write-rules --force --reload')
+        from arctis_sound_manager.udev_checker import is_udev_rules_valid
+        if not is_udev_rules_valid():
+            logger.warning('udev rules are missing or invalid — USB access may fail (errno 13). Run: sudo asm-cli udev write-rules --force --reload')
 
-    # Before the first pw-* spawn: on WirePlumber < 0.5.18 with a hide-parent
-    # rule (SteamOS), every tool ASM starts would be denied ASM's own nodes
-    # (#325). Sets PIPEWIRE_CONFIG_NAME for this process and its children.
-    try:
-        from arctis_sound_manager.pw_utils import exempt_from_software_dsp_hiding
-        exempt_from_software_dsp_hiding()
-    except Exception as exc:
-        logger.warning('could not check for the WirePlumber hide-parent bug: %r', exc)
+    if AUDIO_SUPPORTED:
+        # Before the first pw-* spawn: on WirePlumber < 0.5.18 with a hide-parent
+        # rule (SteamOS), every tool ASM starts would be denied ASM's own nodes
+        # (#325). Sets PIPEWIRE_CONFIG_NAME for this process and its children.
+        try:
+            from arctis_sound_manager.pw_utils import exempt_from_software_dsp_hiding
+            exempt_from_software_dsp_hiding()
+        except Exception as exc:
+            logger.warning('could not check for the WirePlumber hide-parent bug: %r', exc)
 
-    _ensure_media_router_running(logger)
+        _ensure_media_router_running(logger)
+    else:
+        logger.info('No PipeWire on this platform: headset control only, no audio channels.')
 
     dbus_manager = DbusManager.getInstance()
     core_engine = CoreEngine()
 
-    core_loop = asyncio.create_task(core_engine.start(), name='core-loop')
-    dbus_awake_loop = asyncio.create_task(DbusAwake.get_instance().start(core_engine), name='dbus-awake')
-    watchdog_loop = asyncio.create_task(core_engine._loopback_watchdog(), name='loopback-watchdog')
+    tasks = [asyncio.create_task(core_engine.start(), name='core-loop')]
+    if IS_LINUX:
+        # logind's sleep signal, on the system bus.
+        tasks.append(asyncio.create_task(DbusAwake.get_instance().start(core_engine), name='dbus-awake'))
+    if AUDIO_SUPPORTED:
+        tasks.append(asyncio.create_task(core_engine._loopback_watchdog(), name='loopback-watchdog'))
+    if IS_MACOS:
+        # The Sonar EQ on the system's sound, through BlackHole (soft_eq.py).
+        from arctis_sound_manager.soft_eq import SoftEqEngine
+        core_engine.soft_eq = SoftEqEngine(
+            hrir_id=lambda: core_engine.general_settings.hrir_id)
+        tasks.append(asyncio.create_task(core_engine.soft_eq.run(), name='soft-eq'))
 
     # Wire SIGINT/SIGTERM into the asyncio loop so the handler can both flip
     # the stop flags AND cancel the long-lived tasks. Plain signal.signal()
@@ -286,7 +314,7 @@ async def main_async():
             dbus_manager.stop()
         except Exception as e:
             logger.warning(f'dbus_manager.stop() raised: {e!r}')
-        for task in (core_loop, dbus_awake_loop, watchdog_loop):
+        for task in tasks:
             if not task.done():
                 task.cancel()
 
@@ -303,13 +331,16 @@ async def main_async():
         await dbus_manager.wait_for_stop()
     finally:
         # Best-effort: make sure background tasks really exit.
-        for task in (core_loop, dbus_awake_loop, watchdog_loop):
+        for task in tasks:
             if not task.done():
                 task.cancel()
-        await asyncio.gather(core_loop, dbus_awake_loop, watchdog_loop, return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def main():
+    from arctis_sound_manager.platform_support import prepare_session_bus_env
+    prepare_session_bus_env()
+
     parser = argparse.ArgumentParser(prog='asm-daemon')
     parser.add_argument(
         '--verify-setup', action='store_true',

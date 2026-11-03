@@ -3,11 +3,13 @@
 
 import logging
 import os
+import plistlib
 import shutil
 import subprocess
 from pathlib import Path
 
 from arctis_sound_manager import service_control as sc
+from arctis_sound_manager.platform_support import LAUNCHD_DAEMON_LABEL, IS_MACOS, script_path
 
 logger = logging.getLogger(__name__)
 
@@ -402,12 +404,81 @@ class SwayBackend(_LineMarkerBackend):
         return Path.home() / ".config" / "sway" / "config"
 
 
+LAUNCHD_GUI_LABEL = "com.github.arctis-sound-manager.gui"
+
+
+class LaunchdBackend:
+    """macOS: one LaunchAgent for the daemon, one for the menu bar icon.
+
+    Like `systemctl --user enable` without --now, this only writes the
+    agents: launchd loads ~/Library/LaunchAgents at the next login. Loading
+    them now would start a second daemon and a second tray next to the ones
+    the user is running. Disabling deletes them and leaves the running
+    processes alone.
+
+    The daemon's label is the one docs/macos.md installs by hand, so an
+    agent installed that way reads as enabled here.
+    """
+    name = "launchd"
+
+    @property
+    def _agents_dir(self) -> Path:
+        return Path.home() / "Library" / "LaunchAgents"
+
+    def _agent_path(self, label: str) -> Path:
+        return self._agents_dir / f"{label}.plist"
+
+    def is_available(self) -> bool:
+        return IS_MACOS
+
+    def is_enabled(self) -> bool:
+        return self._agent_path(LAUNCHD_DAEMON_LABEL).exists()
+
+    def enable(self) -> None:
+        log = Path.home() / "Library" / "Logs" / "asm-daemon.log"
+        agents = {
+            # Restarted after a crash, not after a clean stop.
+            LAUNCHD_DAEMON_LABEL: {
+                "ProgramArguments": [script_path("asm-daemon")],
+                "KeepAlive": {"SuccessfulExit": False},
+                "ThrottleInterval": 5,
+                "StandardOutPath": str(log),
+                "StandardErrorPath": str(log),
+            },
+            # Quitting the menu bar icon has to keep it quit.
+            LAUNCHD_GUI_LABEL: {
+                "ProgramArguments": [script_path("asm-gui"), "--systray"],
+            },
+        }
+        try:
+            self._agents_dir.mkdir(parents=True, exist_ok=True)
+            for label, agent in agents.items():
+                with self._agent_path(label).open("wb") as f:
+                    plistlib.dump({"Label": label, "RunAtLoad": True, **agent}, f)
+        except OSError as e:
+            logger.warning("autostart: could not write a LaunchAgent: %s", e)
+
+    def disable(self) -> None:
+        for label in (LAUNCHD_DAEMON_LABEL, LAUNCHD_GUI_LABEL):
+            try:
+                self._agent_path(label).unlink(missing_ok=True)
+            except OSError as e:
+                logger.warning("autostart: could not remove %s: %s", label, e)
+
+    def display_name(self) -> str:
+        return "launchd LaunchAgents"
+
+
 def _all_backends():
+    if IS_MACOS:
+        return [LaunchdBackend()]
     return [SystemdBackend(), DinitBackend(), XdgAutostartBackend(),
             HyprlandBackend(), SwayBackend()]
 
 
 def pick_backend():
+    if IS_MACOS:
+        return LaunchdBackend()
     from arctis_sound_manager.init_system import detect_init
     env = detect_environment()
     init = detect_init()

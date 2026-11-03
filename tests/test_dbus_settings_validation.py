@@ -134,12 +134,25 @@ def test_set_setting_rejects_directory_traversal_hrir_id(tmp_path):
 def test_set_setting_accepts_catalogue_hrir_id(tmp_path):
     svc = _make_service(tmp_path)
     with patch("arctis_sound_manager.settings.SETTINGS_FOLDER", tmp_path), \
+         patch("arctis_sound_manager.dbus_service.AUDIO_SUPPORTED", True), \
          patch("arctis_sound_manager.sonar_to_pipewire.apply_hrir_choice") as apply_hrir:
         ok = _set_setting(svc, "hrir_id", json.dumps("ssc_hu"))
 
     assert ok is True
     assert svc.core_engine.general_settings.hrir_id == "ssc_hu"
     apply_hrir.assert_called_once_with("ssc_hu")
+
+
+def test_hrir_id_is_saved_but_not_applied_without_pipewire(tmp_path):
+    # macOS: no HeSuVi chain to load the HRIR into.
+    svc = _make_service(tmp_path)
+    with patch("arctis_sound_manager.settings.SETTINGS_FOLDER", tmp_path), \
+         patch("arctis_sound_manager.dbus_service.AUDIO_SUPPORTED", False), \
+         patch("arctis_sound_manager.sonar_to_pipewire.apply_hrir_choice") as apply_hrir:
+        ok = _set_setting(svc, "hrir_id", json.dumps("ssc_hu"))
+
+    assert ok is True and svc.core_engine.general_settings.hrir_id == "ssc_hu"
+    apply_hrir.assert_not_called()
 
 
 # ── aux_enabled has no ConfigSetting entry either (its own GUI button, not a

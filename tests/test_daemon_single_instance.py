@@ -18,19 +18,26 @@ import logging
 
 import pytest
 
+from arctis_sound_manager import platform_support
 from arctis_sound_manager.scripts import daemon
 
 
-def test_second_instance_exits_instead_of_starting(tmp_path, monkeypatch):
+@pytest.mark.parametrize("macos, code", [(False, 1), (True, 0)])
+def test_second_instance_exits_instead_of_starting(tmp_path, monkeypatch, macos, code):
+    # On macOS the loser exits cleanly: ASM.app and the LaunchAgent can both
+    # start a daemon at login, and launchd's KeepAlive retries a failure.
+    monkeypatch.setattr(platform_support, "IS_MACOS", macos)
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     logger = logging.getLogger("test-daemon")
 
     first = daemon._single_instance_lock(logger)
     assert first is not None, "the first daemon must get the lock"
+    # Its pid, for restart_daemon() to know whom to stop.
+    assert (tmp_path / "arctis-manager.lock").read_text().strip() == str(daemon.os.getpid())
 
     with pytest.raises(SystemExit) as exit_info:
         daemon._single_instance_lock(logger)
-    assert exit_info.value.code == 1
+    assert exit_info.value.code == code
 
     # Releasing it lets the next daemon start — a restart must not need a
     # stale lock file reaped by hand.

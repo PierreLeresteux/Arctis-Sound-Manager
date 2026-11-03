@@ -40,6 +40,7 @@ from arctis_sound_manager.gui.settings_widget import (
     status_key_names,
 )
 from arctis_sound_manager.autostart import active_backend_name, autostart_enabled, set_autostart
+from arctis_sound_manager.platform_support import AUDIO_SUPPORTED, IS_MACOS
 log = logging.getLogger(__name__)
 
 import arctis_sound_manager.gui.theme as _theme
@@ -184,6 +185,7 @@ class DevicePage(QWidget):
     sig_theme_create = Signal()
     sig_theme_edit = Signal(str)   # theme_id
     sig_update_result = Signal(str, str, str)  # re-emits (version, url, wheel_url) from manual re-check
+    _sig_daemon_restarted = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -278,6 +280,17 @@ class DevicePage(QWidget):
         self._startup_toggle.checkStateChanged.connect(self._on_autostart_toggled)
         self._add_row(general, I18n.translate("ui", "launch_at_startup"), self._startup_toggle)
 
+        if IS_MACOS:
+            # No systemctl to restart it with: the app stops the daemon and
+            # starts it again itself (platform_support.restart_daemon).
+            self._restart_daemon_btn = _styled_button(I18n.translate("ui", "restart_daemon_button"))
+            self._restart_daemon_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            self._restart_daemon_btn.setFixedHeight(32)
+            self._restart_daemon_btn.setToolTip(I18n.translate("ui", "restart_daemon_hint"))
+            self._restart_daemon_btn.clicked.connect(self._on_restart_daemon)
+            self._sig_daemon_restarted.connect(self._on_daemon_restarted)
+            self._add_row(general, I18n.translate("ui", "daemon"), self._restart_daemon_btn)
+
         from arctis_sound_manager.telemetry import get_consent, set_consent
 
         consent = get_consent()
@@ -338,9 +351,15 @@ class DevicePage(QWidget):
         # The headset's own settings (sidetone, mic volume, noise cancelling…)
         # live on the Headset page, next to the headset they change. This page
         # keeps what belongs to the app.
-        self._add_settings_group(self._add_card(content_layout, "settings_group_audio"), _AUDIO_KEYS)
-        self._add_settings_group(self._add_card(content_layout, "settings_group_micro"), _MICRO_KEYS)
-        self._add_settings_group(self._add_card(content_layout, "settings_group_generic"), _GENERIC_KEYS)
+        # All three are about the PipeWire graph (and usb_transport about
+        # Linux's two ways in): nothing to set where there is none.
+        if AUDIO_SUPPORTED:
+            self._add_settings_group(self._add_card(content_layout, "settings_group_audio"), _AUDIO_KEYS)
+            self._add_settings_group(self._add_card(content_layout, "settings_group_micro"), _MICRO_KEYS)
+            self._add_settings_group(self._add_card(content_layout, "settings_group_generic"), _GENERIC_KEYS)
+        elif IS_MACOS:
+            # The macOS soft EQ's Spatial Audio has its HRIR to choose.
+            self._add_settings_group(self._add_card(content_layout, "settings_group_audio"), ('hrir_id',))
 
         content_layout.addStretch(1)
 
@@ -365,6 +384,31 @@ class DevicePage(QWidget):
         layout.addWidget(card)
         self._cards.append(card)
         return body_layout
+
+    def _on_restart_daemon(self) -> None:
+        import threading
+
+        from arctis_sound_manager.platform_support import restart_daemon
+
+        self._restart_daemon_btn.setEnabled(False)
+        self._restart_daemon_btn.setText(I18n.translate("ui", "restart_daemon_progress"))
+
+        def run() -> None:
+            try:
+                ok = restart_daemon()
+            except Exception:
+                log.exception("restarting the daemon failed")
+                ok = False
+            self._sig_daemon_restarted.emit(ok)
+
+        threading.Thread(target=run, name="restart-daemon", daemon=True).start()
+
+    @Slot(bool)
+    def _on_daemon_restarted(self, ok: bool) -> None:
+        self._restart_daemon_btn.setEnabled(True)
+        self._restart_daemon_btn.setText(I18n.translate("ui", "restart_daemon_button"))
+        self._restart_daemon_btn.setToolTip(I18n.translate(
+            "ui", "restart_daemon_done" if ok else "restart_daemon_failed"))
 
     def _add_row(self, layout: QVBoxLayout, label: str, control: QWidget) -> QWidget:
         """A label/control row lined up with the rows QSettingsWidget builds."""

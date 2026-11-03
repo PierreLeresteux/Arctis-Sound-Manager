@@ -25,6 +25,7 @@ from arctis_sound_manager.constants import (DBUS_BUS_NAME,
                                             DBUS_STATUS_INTERFACE_NAME,
                                             DBUS_STATUS_OBJECT_PATH)
 from arctis_sound_manager.core import CoreEngine
+from arctis_sound_manager.platform_support import AUDIO_SUPPORTED
 from arctis_sound_manager.pactl import TypedPulseSinkInfo
 from arctis_sound_manager.settings import validate_config_setting_value
 from arctis_sound_manager import device_state
@@ -455,6 +456,26 @@ class ArctisManagerDbusSettingsService(ServiceInterface):
             self.logger.error(f'SendEqCommand error: {e}')
             return False
 
+    @method('ReloadSoftEq')
+    def reload_soft_eq(self) -> 's': # type: ignore
+        """Re-read the Game channel's curve and soft_eq.json (macOS)."""
+        return json.dumps(self._soft_eq(reload=True))
+
+    @method('GetSoftEqStatus')
+    def get_soft_eq_status(self) -> 's': # type: ignore
+        return json.dumps(self._soft_eq(reload=False))
+
+    def _soft_eq(self, reload: bool) -> dict:
+        engine = getattr(self.core_engine, 'soft_eq', None)
+        if engine is None:
+            return {'available': False}
+        try:
+            status = engine.reload() if reload else engine.status
+        except Exception as e:
+            self.logger.error(f'soft EQ: {e!r}')
+            status = {**engine.status, 'error': str(e)}
+        return {'available': True, **status}
+
     @method('ReadHardwareEq')
     async def read_hardware_eq(self) -> 's': # type: ignore
         """Read the parametric EQ curve back from the headset (issue #146).
@@ -572,8 +593,11 @@ class ArctisManagerDbusSettingsService(ServiceInterface):
                 return False
             gs.hrir_id = value
             gs.write_to_file()
-            from arctis_sound_manager.sonar_to_pipewire import apply_hrir_choice
-            apply_hrir_choice(value)
+            if AUDIO_SUPPORTED:
+                from arctis_sound_manager.sonar_to_pipewire import apply_hrir_choice
+                apply_hrir_choice(value)
+            elif getattr(self.core_engine, 'soft_eq', None) is not None:
+                self.core_engine.soft_eq.reload()      # macOS: the soft EQ's HRIR
             return True
 
         # Special case: Aux channel toggle (no ConfigSetting entry — GUI uses

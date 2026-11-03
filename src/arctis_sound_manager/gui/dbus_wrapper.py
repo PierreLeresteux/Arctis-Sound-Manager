@@ -162,6 +162,35 @@ class DbusWrapper(QObject):
                 dbus_bus.disconnect()
 
     @staticmethod
+    def reload_soft_eq(qt_signal: SignalInstance | None = None) -> None:
+        """Have the daemon pick up the Game curve and soft_eq.json (macOS)."""
+        DbusWrapper._executor.submit(asyncio.run, DbusWrapper._soft_eq_async('ReloadSoftEq', qt_signal))
+
+    @staticmethod
+    def get_soft_eq_status(qt_signal: SignalInstance) -> None:
+        DbusWrapper._executor.submit(asyncio.run, DbusWrapper._soft_eq_async('GetSoftEqStatus', qt_signal))
+
+    @staticmethod
+    async def _soft_eq_async(member: str, qt_signal: SignalInstance | None):
+        dbus_bus = None
+        try:
+            dbus_bus = await MessageBus().connect()
+            reply = await dbus_bus.call(Message(
+                destination=DBUS_BUS_NAME,
+                path=DBUS_SETTINGS_OBJECT_PATH,
+                interface=DBUS_SETTINGS_INTERFACE_NAME,
+                member=member,
+                message_type=MessageType.METHOD_CALL,
+            ))
+            if qt_signal is not None and reply and reply.message_type == MessageType.METHOD_RETURN:
+                qt_signal.emit(json.loads(reply.body[0]))
+        except Exception as e:
+            DbusWrapper.logger.error('Error in %s: %s', member, e)
+        finally:
+            if dbus_bus is not None:
+                dbus_bus.disconnect()
+
+    @staticmethod
     def show_splash() -> None:
         DbusWrapper._executor.submit(DbusWrapper.show_splash_thread)
 

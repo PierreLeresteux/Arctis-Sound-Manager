@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from arctis_sound_manager.gui.base_app import QBaseDesktopApp
+from arctis_sound_manager.platform_support import AUDIO_SUPPORTED
 from arctis_sound_manager.gui.components import (
     CLIPS_ICON,
     EQUALIZER_ICON,
@@ -78,6 +79,14 @@ PAGE_CLIPS = 4
 PAGE_SETTINGS = 5
 PAGE_HELP = 6
 PAGE_THEME_EDITOR = 7
+
+# Pages built on PipeWire (the channel mixer, Clips): their sidebar entries
+# are hidden where there is none (macOS). The pages are still built, since
+# every sidebar index is also its stack index. The equaliser stays: on macOS
+# the Sonar EQ runs in the daemon's soft_eq, and the custom EQ is the
+# headset's own.
+AUDIO_PAGES = (PAGE_HOME, PAGE_CLIPS)
+DEFAULT_PAGE = PAGE_HOME if AUDIO_SUPPORTED else PAGE_HEADSET
 
 
 #: Sidebar icon sizes. Help is deliberately smaller — see the note on
@@ -184,9 +193,11 @@ class QMainApp(QBaseDesktopApp):
 
         # DAC tab hidden by default until device confirms it has a DAC
         self._sidebar_buttons[PAGE_DAC].setVisible(False)
+        if not AUDIO_SUPPORTED:
+            for page in AUDIO_PAGES:
+                self._sidebar_buttons[page].setVisible(False)
 
-        # Start on home page
-        self._switch_page(PAGE_HOME)
+        self._switch_page(DEFAULT_PAGE)
 
         # Check for updates (non-blocking background thread)
         from arctis_sound_manager.update_checker import UpdateCheckWorker
@@ -470,7 +481,7 @@ class QMainApp(QBaseDesktopApp):
         """
         buttons = getattr(self, "_sidebar_buttons", None) or []
         if PAGE_CLIPS < len(buttons):
-            buttons[PAGE_CLIPS].setVisible(True)
+            buttons[PAGE_CLIPS].setVisible(AUDIO_SUPPORTED)
 
         # Clips can be switched on or off from the tab itself while the window
         # is open, and the tab has to follow without a restart.
@@ -637,7 +648,7 @@ class QMainApp(QBaseDesktopApp):
         self._sidebar_buttons[PAGE_DAC].setVisible(has_dac)
         self._sidebar.fit_buttons()
         if not has_dac and self._stack.currentIndex() == PAGE_DAC:
-            self._switch_page(PAGE_HOME)
+            self._switch_page(DEFAULT_PAGE)
 
         # Headsets with no on-device equaliser can't do anything with the
         # custom band sliders; only offer the switch to those that can (#146).
