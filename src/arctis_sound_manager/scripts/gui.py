@@ -194,18 +194,9 @@ def _notify_desktop(title: str, body: str) -> None:
     Launched from the menu, stderr goes nowhere: the app just "does not
     open" and the user has nothing to report. notify-send needs no Qt.
     """
-    import shutil
-    import subprocess
+    from arctis_sound_manager.platform_support import notify
 
-    notify_send = shutil.which("notify-send")
-    if not notify_send:
-        return
-    try:
-        subprocess.run([notify_send, "--urgency=critical", "--app-name=asm-gui", title, body],
-                       timeout=5, check=False,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except (OSError, subprocess.SubprocessError):
-        pass
+    notify(title, body, critical=True, app_name="asm-gui")
 
 
 from arctis_sound_manager.runtime_staleness import (  # noqa: E402
@@ -279,6 +270,12 @@ def claim_instance_server(local_server_cls, local_socket_cls, message: bytes):
 
 
 def main():
+    from arctis_sound_manager.platform_support import (IS_APP_BUNDLE, prepare_session_bus_env,
+                                                       start_daemon_if_needed)
+    prepare_session_bus_env()
+    if IS_APP_BUNDLE:
+        start_daemon_if_needed()
+
     parser = ArgumentParser()
     parser.add_argument('--systray', action='store_true',
                         help='Start systray without opening window (for autostart at login)')
@@ -310,10 +307,14 @@ def main():
     log_level = resolve_level(default=base_level)
     logging.basicConfig(level=log_level, format='%(name)20s %(levelname)8s | %(message)s')
 
-    _check_display_or_exit()
+    from arctis_sound_manager.platform_support import AUDIO_SUPPORTED, IS_LINUX, IS_MACOS
+
+    # X11/Wayland only: macOS always has its Cocoa platform plugin.
+    if IS_LINUX:
+        _check_display_or_exit()
     QTimer, QLocalServer, QLocalSocket, QApplication, QDialog = _import_qt_or_exit()
 
-    xcb_help = _xcb_cursor_help()
+    xcb_help = _xcb_cursor_help() if IS_LINUX else None
     if xcb_help:
         sys.stderr.write(xcb_help)
         _notify_desktop("Arctis Sound Manager cannot start", xcb_help)
@@ -457,7 +458,9 @@ def main():
     from pathlib import Path as _Path
     setup_done_flag = _Path.home() / ".config" / "arctis_manager" / ".setup_done"
     setup_was_missing = not setup_done_flag.exists()
-    if setup_was_missing:
+    # asm-setup deploys PipeWire configs and systemd/dinit units: nothing to
+    # set up where there is neither.
+    if setup_was_missing and IS_LINUX:
         from arctis_sound_manager.gui.first_run_dialog import FirstRunDialog
         def _first_run():
             _exec_foreground(FirstRunDialog())
@@ -495,7 +498,8 @@ def main():
             else:
                 from arctis_sound_manager.gui.udev_dialog import UdevRulesDialog
                 _exec_foreground(UdevRulesDialog())
-    _queue_dialog(udev_delay_ms, _check_udev)
+    if IS_LINUX:
+        _queue_dialog(udev_delay_ms, _check_udev)
 
     # ── Telemetry consent (first launch only) ─────────────────────────────────
     from arctis_sound_manager.telemetry import get_consent, set_consent
@@ -517,7 +521,8 @@ def main():
         )
         if should_show_dialog():
             _exec_foreground(SystemDepsDialog())
-    _queue_dialog(2500, _check_deps)
+    if IS_LINUX:
+        _queue_dialog(2500, _check_deps)
 
     # -- Preset sync (new Sonar presets added since install) ------------------
     def _general_toggle(key: str) -> bool:
@@ -642,7 +647,9 @@ def main():
         _sync_presets._worker = w  # prevent GC until thread finishes
         w.start()
 
-    QTimer.singleShot(6000, _sync_presets)
+    # The Sonar presets: the Linux filter-chain and the macOS soft EQ.
+    if AUDIO_SUPPORTED or IS_MACOS:
+        QTimer.singleShot(6000, _sync_presets)
 
     # Open the window once the event loop is running.
     if args.url:
@@ -659,7 +666,7 @@ def main():
         # Clips is on; a second later so the tray comes up first.
         QTimer.singleShot(1000, q_object.arm_background_pages)
 
-    if not args.no_enforce_systemd:
+    if IS_LINUX and not args.no_enforce_systemd:
         ensure_systemd_unit(True)
 
     timer = QTimer()

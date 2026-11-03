@@ -306,6 +306,9 @@ curl -fsSL https://loteran.github.io/Arctis-Sound-Manager/install.sh | bash
 
 It detects your distribution, installs the matching native package (pacman repository / COPR / PPA — or a Distrobox container on Bazzite / Silverblue / SteamOS), and runs `asm-setup` for you. Prefer to read it first? `curl … -o asm-install.sh`, inspect it, then `bash asm-install.sh`.
 
+> [!NOTE]
+> **macOS:** headset control (settings, battery, ChatMix position) runs from source or as a self-contained app. The PipeWire features (channels, Sonar EQ, surround, Clips) do not. See [docs/macos.md](docs/macos.md).
+
 Or install manually for your distribution below. All native packages (AUR / COPR / PPA) pull in every dependency automatically. After installing, run `asm-setup` once — it configures udev rules, systemd services, PipeWire and downloads the HRIR file.
 
 > [!IMPORTANT]

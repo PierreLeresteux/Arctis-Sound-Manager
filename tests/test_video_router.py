@@ -10,6 +10,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+# The media router is PipeWire's: it does not exist where pulsectl does not (macOS).
+pytest.importorskip("pulsectl")
+
 from arctis_sound_manager.power_status import HeadsetPower
 from arctis_sound_manager.pw_utils import app_override_key
 from arctis_sound_manager.scripts import video_router

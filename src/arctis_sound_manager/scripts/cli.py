@@ -620,6 +620,9 @@ def remove_desktop_entries() -> int:
 
 
 def main():
+    from arctis_sound_manager.platform_support import prepare_session_bus_env
+    prepare_session_bus_env()
+
     parser = ArgumentParser(description=f'Arctis Sound Manager CLI v {project_version()}')
     subparsers = parser.add_subparsers(dest='command', required=True)
 

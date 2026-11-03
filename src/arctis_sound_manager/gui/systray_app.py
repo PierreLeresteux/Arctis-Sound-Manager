@@ -20,6 +20,7 @@ from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from arctis_sound_manager import service_control as sc
+from arctis_sound_manager.platform_support import AUDIO_SUPPORTED, IS_MACOS
 from arctis_sound_manager.constants import (DBUS_BUS_NAME,
                                             DBUS_STATUS_INTERFACE_NAME,
                                             DBUS_STATUS_OBJECT_PATH,
@@ -185,12 +186,14 @@ class QSystrayApp(QBaseDesktopApp):
 
         # Automatic Sonar Game preset per detected game (opt-in; the toggle on
         # the Sonar page is read from disk each tick, so no cross-widget wiring).
+        # Games are told apart by their PipeWire streams: none on macOS.
         self._game_preset_watcher = None
         try:
-            from arctis_sound_manager.gui.game_preset_watcher import GamePresetWatcher
-            self._game_preset_watcher = GamePresetWatcher(self._sonar_applier, self)
-            self._game_preset_watcher.notify.connect(self._on_game_preset_notify)
-            self._game_preset_watcher.start()
+            if AUDIO_SUPPORTED:
+                from arctis_sound_manager.gui.game_preset_watcher import GamePresetWatcher
+                self._game_preset_watcher = GamePresetWatcher(self._sonar_applier, self)
+                self._game_preset_watcher.notify.connect(self._on_game_preset_notify)
+                self._game_preset_watcher.start()
         except Exception as e:
             self.logger.warning("Automatic game preset unavailable: %s", e)
 
@@ -234,9 +237,12 @@ class QSystrayApp(QBaseDesktopApp):
             lambda: self._master_osd_enabled,
             parent=self,
         )
-        self._chatmix_watcher.start()
-        if self._chatmix_osd_enabled or self._master_osd_enabled:
-            enable_gnome_extension_once()
+        # It follows PipeWire's streams and draws through GNOME's or
+        # layer-shell's overlay: neither exists on macOS.
+        if AUDIO_SUPPORTED:
+            self._chatmix_watcher.start()
+            if self._chatmix_osd_enabled or self._master_osd_enabled:
+                enable_gnome_extension_once()
 
         self.new_status.connect(self.on_new_status)
         self.dbus_poll_thread = Thread(target=self.poll_dbus_thread, daemon=True)
@@ -391,25 +397,26 @@ class QSystrayApp(QBaseDesktopApp):
         self.logger.info('Starting Systray app.')
         self.tray_icon.show()
 
-        # start (not restart): just ensure filter-chain is up without cutting audio.
-        sc.start("filter-chain")
+        self._previous_default_sink = ''
+        if AUDIO_SUPPORTED:
+            # start (not restart): just ensure filter-chain is up without cutting audio.
+            sc.start("filter-chain")
 
-        # Save the current default sink so sig_stop() can restore it.
-        # The daemon owns redirect logic (redirect_audio_on_connect / on_disconnect).
-        try:
-            result = subprocess.run(
-                ["pactl", "get-default-sink"], capture_output=True, text=True
-            )
-            self._previous_default_sink = result.stdout.strip()
-        except FileNotFoundError:
-            # pactl (pulseaudio-utils) missing — degrade gracefully instead of
-            # crashing at startup (#117). Default-sink save/restore is skipped;
-            # the system-deps check surfaces the missing package to the user.
-            self.logger.warning(
-                'pactl not found (install pulseaudio-utils) — '
-                'skipping default-sink save/restore'
-            )
-            self._previous_default_sink = ''
+            # Save the current default sink so sig_stop() can restore it.
+            # The daemon owns redirect logic (redirect_audio_on_connect / on_disconnect).
+            try:
+                result = subprocess.run(
+                    ["pactl", "get-default-sink"], capture_output=True, text=True
+                )
+                self._previous_default_sink = result.stdout.strip()
+            except FileNotFoundError:
+                # pactl (pulseaudio-utils) missing — degrade gracefully instead of
+                # crashing at startup (#117). Default-sink save/restore is skipped;
+                # the system-deps check surfaces the missing package to the user.
+                self.logger.warning(
+                    'pactl not found (install pulseaudio-utils) — '
+                    'skipping default-sink save/restore'
+                )
 
         self.dbus_bus = await MessageBus().connect()
 
@@ -506,9 +513,10 @@ class QSystrayApp(QBaseDesktopApp):
             self.logger.error('game preset section failed: %s', e, exc_info=True)
 
         # Reclaim audio (move misrouted app streams back to the headset)
-        _sep()
-        self._menu_actions['reclaim_audio'] = _add(QAction(I18n.translate('ui', 'reclaim_audio')))
-        self._menu_actions['reclaim_audio'].triggered.connect(self._on_reclaim_audio)
+        if AUDIO_SUPPORTED:
+            _sep()
+            self._menu_actions['reclaim_audio'] = _add(QAction(I18n.translate('ui', 'reclaim_audio')))
+            self._menu_actions['reclaim_audio'].triggered.connect(self._on_reclaim_audio)
 
         # Output Routing (per-channel physical sink selection)
         try:
@@ -579,25 +587,15 @@ class QSystrayApp(QBaseDesktopApp):
             _maint_menu = QMenu(I18n.translate('ui', 'maintenance_menu'))
             self._menu_action_refs.append(_maint_menu)
 
-            _a_engine = _maint_menu.addAction(I18n.translate('ui', 'restart_audio_engine'))
-            self._menu_action_refs.append(_a_engine)
-            _a_engine.triggered.connect(self._on_restart_audio_engine)
-
-            _a_asm = _maint_menu.addAction(I18n.translate('ui', 'restart_asm'))
-            self._menu_action_refs.append(_a_asm)
-            _a_asm.triggered.connect(self._on_restart_asm)
-
-            _a_regen = _maint_menu.addAction(I18n.translate('ui', 'regenerate_audio_configs'))
-            self._menu_action_refs.append(_a_regen)
-            _a_regen.triggered.connect(self._on_regenerate_audio_configs)
-
-            if not sc.manager_available():
-                # No systemctl/dinitctl at all — grey the entries out instead of
-                # letting them fail silently when clicked.
-                _unavailable_tip = I18n.translate('ui', 'service_manager_unavailable')
-                for _a in (_a_engine, _a_asm, _a_regen):
-                    _a.setEnabled(False)
-                    _a.setToolTip(_unavailable_tip)
+            if IS_MACOS:
+                # No audio engine or PipeWire configs to look after: the
+                # daemon is all there is to restart, without launchd's help
+                # when it was started by the app.
+                _a_daemon = _maint_menu.addAction(I18n.translate('ui', 'restart_daemon'))
+                self._menu_action_refs.append(_a_daemon)
+                _a_daemon.triggered.connect(self._on_restart_daemon)
+            else:
+                self._linux_maintenance_actions(_maint_menu)
 
             _sep()
             self.menu.addMenu(_maint_menu)
@@ -621,6 +619,27 @@ class QSystrayApp(QBaseDesktopApp):
         # Exit
         self._menu_actions['exit'] = _add(QAction(I18n.translate('ui', 'exit')))
         self._menu_actions['exit'].triggered.connect(self.sig_stop)
+
+    def _linux_maintenance_actions(self, _maint_menu) -> None:
+        _a_engine = _maint_menu.addAction(I18n.translate('ui', 'restart_audio_engine'))
+        self._menu_action_refs.append(_a_engine)
+        _a_engine.triggered.connect(self._on_restart_audio_engine)
+
+        _a_asm = _maint_menu.addAction(I18n.translate('ui', 'restart_asm'))
+        self._menu_action_refs.append(_a_asm)
+        _a_asm.triggered.connect(self._on_restart_asm)
+
+        _a_regen = _maint_menu.addAction(I18n.translate('ui', 'regenerate_audio_configs'))
+        self._menu_action_refs.append(_a_regen)
+        _a_regen.triggered.connect(self._on_regenerate_audio_configs)
+
+        if not sc.manager_available():
+            # No systemctl/dinitctl at all — grey the entries out instead of
+            # letting them fail silently when clicked.
+            _unavailable_tip = I18n.translate('ui', 'service_manager_unavailable')
+            for _a in (_a_engine, _a_asm, _a_regen):
+                _a.setEnabled(False)
+                _a.setToolTip(_unavailable_tip)
 
     def _on_tray_profile(self, profile) -> None:
         from arctis_sound_manager.profile_manager import apply_profile
@@ -721,7 +740,7 @@ class QSystrayApp(QBaseDesktopApp):
         too rather than relying solely on that stale-by-construction state.
         """
         title = "Arctis Sound Manager"
-        if not sc.manager_available():
+        if not IS_MACOS and not sc.manager_available():
             self.tray_icon.showMessage(
                 title, I18n.translate('ui', 'service_manager_unavailable'),
                 QSystemTrayIcon.MessageIcon.Warning, 5000,
@@ -812,6 +831,13 @@ class QSystrayApp(QBaseDesktopApp):
 
         self._run_maintenance_action(
             _do, 'restart_asm_progress', 'restart_asm_done', 'restart_asm_failed',
+        )
+
+    def _on_restart_daemon(self) -> None:
+        from arctis_sound_manager.platform_support import restart_daemon
+        self._run_maintenance_action(
+            restart_daemon, 'restart_daemon_progress', 'restart_daemon_done',
+            'restart_daemon_failed',
         )
 
     def _on_regenerate_audio_configs(self) -> None:
@@ -1057,6 +1083,12 @@ class QSystrayApp(QBaseDesktopApp):
 
         self._stopping = True
         self.logger.debug('Received shutdown signal, shutting down.')
+
+        if not AUDIO_SUPPORTED:
+            # No audio graph to hand back, and no init system service to stop:
+            # on macOS launchd owns the daemon.
+            self.app.quit()
+            return
 
         # On quit we either restore the pre-ASM default sink (so EasyEffects or
         # hardware takes over), or — when the user configured "redirect on

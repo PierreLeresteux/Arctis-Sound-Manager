@@ -31,6 +31,7 @@ from arctis_sound_manager.gui.sonar_page import SonarPage
 from arctis_sound_manager.gui.dbus_wrapper import DbusWrapper
 from arctis_sound_manager.gui.fader_slider import CAP_H, FADER_HANDLE_QSS, FaderSlider
 from arctis_sound_manager.i18n import I18n
+from arctis_sound_manager.platform_support import IS_MACOS
 from arctis_sound_manager.sonar_to_pipewire import ensure_sonar_eq_configs
 import arctis_sound_manager.gui.theme as _theme
 from arctis_sound_manager.gui.theme import (
@@ -943,6 +944,15 @@ class EqualizerPage(QWidget):
     def _on_toggle(self):
         old_mode = _current_mode()
         new_mode = "sonar" if old_mode == "custom" else "custom"
+        if IS_MACOS:
+            # No PipeWire graph to rebuild: the mode file is the switch. The
+            # daemon's soft EQ follows it, and so does its hardware EQ
+            # (reconcile_hardware_eq_mode flattens the headset's in Sonar).
+            STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            STATE_FILE.write_text(new_mode)
+            DbusWrapper.reload_soft_eq()
+            self._on_toggle_done(True, new_mode)
+            return
         self._button.setEnabled(False)
         self._button.setText(I18n.translate('ui', 'restarting_audio'))
         self._worker = _ToggleWorker(new_mode, old_mode)

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent for asm-daemon on macOS: started at login, restarted if it
+  crashes. __REPO__ and __HOME__ are filled in at install time, see
+  docs/macos.md.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.github.arctis-sound-manager.daemon</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>__REPO__/.venv/bin/asm-daemon</string>
+	</array>
+
+	<key>RunAtLoad</key>
+	<true/>
+
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+
+	<key>ThrottleInterval</key>
+	<integer>5</integer>
+
+	<key>StandardOutPath</key>
+	<string>__HOME__/Library/Logs/asm-daemon.log</string>
+	<key>StandardErrorPath</key>
+	<string>__HOME__/Library/Logs/asm-daemon.log</string>
+</dict>
+</plist>

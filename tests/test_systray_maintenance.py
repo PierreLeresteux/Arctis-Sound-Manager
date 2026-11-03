@@ -76,6 +76,12 @@ def _fake_self(monkeypatch):
     return obj
 
 
+@pytest.fixture(autouse=True)
+def _linux(monkeypatch):
+    """The systemd/dinit entries; macOS has its own (see the end)."""
+    monkeypatch.setattr(sysapp, "IS_MACOS", False)
+
+
 def _message_bodies(fake_self) -> list[str]:
     return [c.args[1] for c in fake_self.tray_icon.showMessage.call_args_list]
 
@@ -241,6 +247,8 @@ def test_all_maintenance_i18n_keys_exist_in_en_ini():
         'regenerate_audio_configs', 'regenerate_audio_configs_progress',
         'regenerate_audio_configs_done', 'regenerate_audio_configs_failed',
         'service_manager_unavailable',
+        'restart_daemon', 'restart_daemon_progress', 'restart_daemon_done',
+        'restart_daemon_failed',
     ]
     for key in keys:
         value = I18n.translate('ui', key)
@@ -348,3 +356,24 @@ def test_worker_reference_is_released_on_finished_not_on_done(monkeypatch):
     worker.finished.emit()
     assert fake_self._maintenance_workers == []
     assert worker.deleted, "a finished worker must be handed to deleteLater()"
+
+
+# ── macOS: restart the daemon, no service manager needed ────────────────────
+
+@pytest.mark.parametrize("ok, key", [(True, "restart_daemon_done"),
+                                     (False, "restart_daemon_failed")])
+def test_macos_restarts_the_daemon_itself(monkeypatch, ok, key):
+    from arctis_sound_manager import platform_support
+
+    fake_self = _fake_self(monkeypatch)
+    fake_self._on_restart_daemon = types.MethodType(sysapp.QSystrayApp._on_restart_daemon,
+                                                    fake_self)
+    monkeypatch.setattr(sysapp, "IS_MACOS", True)
+    monkeypatch.setattr(sysapp.sc, "manager_available", lambda: False)
+    calls = []
+    monkeypatch.setattr(platform_support, "restart_daemon", lambda: calls.append(1) or ok)
+
+    fake_self._on_restart_daemon()
+
+    assert calls == [1]
+    assert I18n.translate('ui', key) in _message_bodies(fake_self)

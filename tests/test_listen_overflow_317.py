@@ -7,6 +7,7 @@ overflow now gets the wedged-device USB reset, once, and is logged sparingly.
 """
 
 import asyncio
+import errno
 import threading
 from collections import deque
 from unittest.mock import MagicMock
@@ -18,7 +19,7 @@ from arctis_sound_manager.core import CoreEngine
 
 
 def _overflow(*a, **k):
-    raise usb.core.USBError("Overflow", errno=75)
+    raise usb.core.USBError("Overflow", errno=errno.EOVERFLOW)
 
 
 def _engine(reads):
@@ -74,8 +75,8 @@ def test_a_short_streak_does_not_reset(monkeypatch):
 
 def test_a_good_read_ends_the_streak(monkeypatch):
     n = core_mod._OVERFLOW_RESET_STREAK - 1
-    outcomes = [usb.core.USBError("Overflow", errno=75)] * n + [[0] * 8] \
-        + [usb.core.USBError("Overflow", errno=75)] * n
+    outcomes = [usb.core.USBError("Overflow", errno=errno.EOVERFLOW)] * n + [[0] * 8] \
+        + [usb.core.USBError("Overflow", errno=errno.EOVERFLOW)] * n
     engine = _engine(outcomes)
 
     _run(engine, monkeypatch, len(outcomes))

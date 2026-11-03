@@ -19,6 +19,7 @@ import subprocess
 from pathlib import Path
 
 from arctis_sound_manager import service_control as sc
+from arctis_sound_manager.platform_support import AUDIO_SUPPORTED, IS_MACOS
 from arctis_sound_manager.gui.channel_output_selector import ChannelOutputSelector
 from arctis_sound_manager.gui.output_selector import OutputSelector
 from arctis_sound_manager.gui.search_pick_dialog import SearchPickDialog
@@ -1843,7 +1844,7 @@ class SonarChannelWidget(QWidget):
 
             if channel == "game":
                 from arctis_sound_manager import device_state as _ds
-                _has_spatial = _ds.get_spatial_engine() != "none"
+                _has_spatial = (AUDIO_SUPPORTED or IS_MACOS) and _ds.get_spatial_engine() != "none"
                 self._spatial = SpatialAudioWidget(channel="game")
                 self._spatial.bind_presets("game", self._active_preset)
                 self._spatial.setVisible(_has_spatial)
@@ -1876,6 +1877,9 @@ class SonarChannelWidget(QWidget):
 
             self._smart = SmartVolumeWidget()
             scl.addWidget(self._smart)
+            # The macOS soft EQ has it too, on the Game channel it runs.
+            sep2.setVisible(AUDIO_SUPPORTED or IS_MACOS)
+            self._smart.setVisible(AUDIO_SUPPORTED or IS_MACOS)
 
             if channel in ("chat", "media", "output"):
                 scl.addStretch(1)
@@ -2125,6 +2129,15 @@ class SonarChannelWidget(QWidget):
         self._apply_timer.start(_APPLY_DELAY if delay is None else delay)
 
     def _do_apply(self):
+        if not AUDIO_SUPPORTED:
+            # No PipeWire to write a filter-chain for. On macOS the daemon's
+            # soft EQ runs the Game curve on the system's sound instead.
+            if IS_MACOS and self._channel in ("game", "micro"):
+                basses, voix, aigus = self._macros.get_values()
+                apply = _apply_soft_eq if self._channel == "game" else _apply_soft_mic
+                apply(list(self._cur_bands), basses, voix, aigus)
+                self._on_apply_result(True)
+            return
         if self._worker is not None:
             # A worker is in flight (running, or finishing but not yet cleaned
             # up) — remember to re-apply once it is fully done.
@@ -2162,6 +2175,36 @@ class SonarChannelWidget(QWidget):
         if self._pending_apply:
             self._pending_apply = False
             self._do_apply()
+
+
+def _apply_soft_eq(bands: list[EqBand], basses: float, voix: float, aigus: float) -> None:
+    """macOS: hand the Game curve to the daemon's soft EQ (soft_eq.py).
+
+    Through the same snapshot the Linux confs leave behind, which the
+    engine reads, with the Boost and Smart Volume as _ApplyWorker reads them.
+    """
+    from arctis_sound_manager.gui.dbus_wrapper import DbusWrapper
+    from arctis_sound_manager.sonar_to_pipewire import _save_eq_state
+    boost_state = _load_boost()
+    boost_db = boost_state.get("db", 0.0) if boost_state.get("enabled") else 0.0
+    _save_eq_state("game", bands, basses, voix, aigus, boost_db, _load_smart_volume())
+    DbusWrapper.reload_soft_eq()
+
+
+def _apply_soft_mic(bands: list[EqBand], basses: float, voix: float, aigus: float) -> None:
+    """macOS: hand the Micro curve and processing to the daemon's soft EQ.
+
+    The snapshot generate_sonar_micro_conf leaves behind on Linux, with the
+    Boost and processing _ApplyWorker reads for the micro.
+    """
+    from arctis_sound_manager.gui.dbus_wrapper import DbusWrapper
+    from arctis_sound_manager.sonar_to_pipewire import _save_micro_state
+    boost_state = _load_boost()
+    boost_db = boost_state.get("db", 0.0) if boost_state.get("enabled") else 0.0
+    micro_proc = _load_micro_proc()
+    _save_micro_state(bands, basses, voix, aigus, boost_db,
+                      micro_proc.get("noiseCanceling") or {}, micro_proc)
+    DbusWrapper.reload_soft_eq()
 
 
 # ── Boost de Volume / Smart Volume — persistence ─────────────────────────────
@@ -3831,6 +3874,11 @@ class SonarMicroWidget(SonarChannelWidget):
         sep1.setFrameShape(QFrame.Shape.HLine)
         sep1.setStyleSheet(f"background: {BORDER}; border: none; max-height: 1px;")
         msl.addWidget(sep1)
+        if IS_MACOS:
+            # RNNoise and DeepFilterNet are Linux LADSPA plugins; the macOS
+            # soft EQ runs the rest of this chain.
+            self._nc_card.setVisible(False)
+            sep1.setVisible(False)
 
         # Noise Reduction + Noise Gate side by side
         side = QWidget()
@@ -4128,7 +4176,8 @@ class SonarPage(QWidget):
         self._pending_apply_all: bool = False
 
         # Fix stale configs (broken builtins, wrong locations, duplicate HeSuVi node, …)
-        fixed, needs_pw_restart = check_and_fix_stale_configs()
+        # Not where there is no PipeWire to read them (macOS).
+        fixed, needs_pw_restart = check_and_fix_stale_configs() if AUDIO_SUPPORTED else (False, False)
         if fixed:
             import logging
             if needs_pw_restart:
@@ -4249,8 +4298,11 @@ class SonarPage(QWidget):
 
         root.addWidget(self._tabs, 1)
 
-        # Load external output target from settings
-        self._load_output_target()
+        if IS_MACOS:
+            self._build_for_macos(root)
+        else:
+            # Load external output target from settings
+            self._load_output_target()
 
         # Debounce the daemon-side Spatial Audio apply (#169): the Immersion/
         # Distance sliders emit state_changed on every tick while dragged, but
@@ -4276,6 +4328,33 @@ class SonarPage(QWidget):
         # Apply the currently-active theme so a saved non-default theme renders
         # correctly on first paint.
         self.apply_theme()
+
+    def _build_for_macos(self, root: QVBoxLayout) -> None:
+        """The Mac's sound and microphone, run by the daemon's soft EQ.
+
+        No per-app channels, output routing or screen-share guard: those
+        are PipeWire's. The soft EQ runs the Game tab's curve on the Mac's
+        sound and the Micro tab's on the microphone, so those are the tabs
+        left, under the soft EQ's switches.
+        """
+        from arctis_sound_manager.gui.soft_eq_bar import SoftEqBar
+        for widget in (self._media_widget, self._aux_widget, self._chat_widget,
+                       self._output_widget):
+            self._tabs.removeTab(self._tabs.indexOf(widget))
+        # Its device comes from the soft EQ's microphone picker instead.
+        self._micro_source.setVisible(False)
+        self._safe_mode_timer.stop()
+        for widget in (self._safe_mode_banner, self._stream_guard_bar,
+                       self._auto_game_preset_bar):
+            widget.setVisible(False)
+        for selector in (self._output_selector, self._game_output_selector,
+                         self._chat_output_selector, self._media_output_selector,
+                         self._aux_output_selector):
+            selector._timer.stop()
+            selector.setVisible(False)
+        self._soft_eq_bar = SoftEqBar()
+        root.insertWidget(root.indexOf(self._tabs), self._soft_eq_bar)
+        root.insertSpacing(root.indexOf(self._tabs), 12)
 
     # ── Safe-mode banner (issue #88) ──────────────────────────────────────────
     def _build_safe_mode_banner(self) -> QFrame:
@@ -4422,6 +4501,8 @@ class SonarPage(QWidget):
         one orphans every stream playing to it, which is why swapping between
         Bluetooth and the headset lost audio and scattered channels.
         """
+        if not AUDIO_SUPPORTED:
+            return
         if update_override:
             self._output_widget._target_override = device_id
         try:
@@ -4505,6 +4586,8 @@ class SonarPage(QWidget):
         registered, so generate_hesuvi_conf no-ops there — issue #169). The
         daemon self-guards: a pure toggle, which leaves Immersion/Distance
         untouched, produces an identical conf and triggers no restart."""
+        if not AUDIO_SUPPORTED:
+            return
         from arctis_sound_manager.gui.dbus_wrapper import DbusWrapper
         DbusWrapper.apply_spatial_audio()
 
@@ -4526,6 +4609,13 @@ class SonarPage(QWidget):
         _pending_apply_all flag so that exactly one more restart is scheduled
         when the current worker finishes.
         """
+        if not AUDIO_SUPPORTED:
+            if IS_MACOS:
+                # Boost and Smart Volume: the soft EQ's, with the Game curve,
+                # and the Boost the micro gets too.
+                self._game_widget._do_apply()
+                self._micro_widget._do_apply()
+            return
         if self._apply_all_worker is not None:
             # A restart is already in flight — remember to run one more after.
             self._pending_apply_all = True
@@ -4565,6 +4655,8 @@ class SonarPage(QWidget):
             self._stream_guard_bar.apply_theme(t)
         if hasattr(self, "_auto_game_preset_bar"):
             self._auto_game_preset_bar.apply_theme(t)
+        if hasattr(self, "_soft_eq_bar"):
+            self._soft_eq_bar.apply_theme(t)
 
         self._tabs.setStyleSheet(_channel_tabs_qss())
         if hasattr(self, "_micro_source"):
@@ -4578,6 +4670,8 @@ class SonarPage(QWidget):
 
     def apply_all_from_files(self) -> None:
         """Re-apply all 3 EQ channels from current config files (used by profile system)."""
+        if not AUDIO_SUPPORTED:
+            return
         worker = _ApplyAllWorker()
         worker.done.connect(lambda ok: None)  # fire-and-forget
         worker.start()
