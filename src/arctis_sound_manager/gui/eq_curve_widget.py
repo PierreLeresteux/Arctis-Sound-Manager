@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from arctis_sound_manager.eq_types import EqBand, PW_LABEL  # noqa: F401 — re-exported for back-compat
+from arctis_sound_manager.eq_types import EqBand, PW_LABEL, rbj_coefficients  # noqa: F401 — re-exported for back-compat
 import arctis_sound_manager.gui.theme as theme
 from arctis_sound_manager.gui.qt_widgets.no_wheel_combo import NoWheelComboBox
 # NOTE: ACCENT/BG_CARD/etc. frozen constants are NOT imported here for painting —
@@ -80,57 +80,10 @@ _FREQ_POINTS: list[float] = [
 
 def _biquad_response(band: EqBand, freqs: list[float]) -> list[float]:
     """Amplitude response (dB) of a single biquad filter at each frequency."""
-    f0, gain_db, Q = band.freq, band.gain, band.q
-    A = 10 ** (gain_db / 40.0)
-    w0 = 2 * math.pi * f0 / _SR
-    cosw = math.cos(w0)
-    sinw = math.sin(w0)
-    alpha = sinw / (2 * Q)
-
-    t = band.type
-    if t == "peakingEQ":
-        b0 = 1 + alpha * A;  b1 = -2 * cosw;  b2 = 1 - alpha * A
-        a0 = 1 + alpha / A;  a1 = -2 * cosw;  a2 = 1 - alpha / A
-    elif t == "lowPass":
-        b0 = (1 - cosw) / 2; b1 = 1 - cosw;   b2 = (1 - cosw) / 2
-        a0 = 1 + alpha;      a1 = -2 * cosw;  a2 = 1 - alpha
-    elif t == "highPass":
-        b0 = (1 + cosw) / 2; b1 = -(1 + cosw); b2 = (1 + cosw) / 2
-        a0 = 1 + alpha;      a1 = -2 * cosw;   a2 = 1 - alpha
-    elif t == "lowShelving":
-        sA = math.sqrt(A)
-        b0 =      A * ((A + 1) - (A - 1) * cosw + 2 * sA * alpha)
-        b1 =  2 * A * ((A - 1) - (A + 1) * cosw)
-        b2 =      A * ((A + 1) - (A - 1) * cosw - 2 * sA * alpha)
-        a0 =           (A + 1) + (A - 1) * cosw + 2 * sA * alpha
-        a1 = -2 *     ((A - 1) + (A + 1) * cosw)
-        a2 =           (A + 1) + (A - 1) * cosw - 2 * sA * alpha
-    elif t == "highShelving":
-        sA = math.sqrt(A)
-        b0 =      A * ((A + 1) + (A - 1) * cosw + 2 * sA * alpha)
-        b1 = -2 * A * ((A - 1) + (A + 1) * cosw)
-        b2 =      A * ((A + 1) + (A - 1) * cosw - 2 * sA * alpha)
-        a0 =           (A + 1) - (A - 1) * cosw + 2 * sA * alpha
-        a1 =  2 *     ((A - 1) - (A + 1) * cosw)
-        a2 =           (A + 1) - (A - 1) * cosw - 2 * sA * alpha
-    elif t == "bandPassPeak0dB":
-        b0 = alpha;          b1 = 0.0;        b2 = -alpha
-        a0 = 1 + alpha;      a1 = -2 * cosw;  a2 = 1 - alpha
-    elif t == "bandPassPeakQ":
-        b0 = sinw / 2;       b1 = 0.0;        b2 = -sinw / 2
-        a0 = 1 + alpha;      a1 = -2 * cosw;  a2 = 1 - alpha
-    elif t == "notchFilter":
-        b0 = 1.0;            b1 = -2 * cosw;  b2 = 1.0
-        a0 = 1 + alpha;      a1 = -2 * cosw;  a2 = 1 - alpha
-    elif t == "allPass":
-        b0 = 1 - alpha;      b1 = -2 * cosw;  b2 = 1 + alpha
-        a0 = 1 + alpha;      a1 = -2 * cosw;  a2 = 1 - alpha
-    else:
+    coefficients = rbj_coefficients(band, _SR)
+    if coefficients is None:
         return [0.0] * len(freqs)
-
-    # Normalise
-    b0 /= a0; b1 /= a0; b2 /= a0
-    a1 /= a0; a2 /= a0
+    b0, b1, b2, a1, a2 = coefficients
 
     result = []
     for f in freqs:

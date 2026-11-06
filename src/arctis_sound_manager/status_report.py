@@ -19,6 +19,7 @@ import asyncio
 import json
 from typing import Any
 
+from arctis_sound_manager.platform_support import AUDIO_SUPPORTED
 from arctis_sound_manager.power_status import HeadsetPower, extract_power_status
 
 # Bumped only when a key is removed or changes meaning. Adding keys is not a
@@ -145,7 +146,8 @@ def format_status(result: dict[str, Any]) -> list[str]:
 
     channels = result['channels']
     if channels is None:
-        lines.append('channels: PipeWire unreachable')
+        if AUDIO_SUPPORTED:
+            lines.append('channels: PipeWire unreachable')
     else:
         for channel, info in channels.items():
             if not info['present']:

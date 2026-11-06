@@ -8,6 +8,8 @@ import logging
 import os
 from pathlib import Path
 
+from arctis_sound_manager.platform_support import IS_MACOS
+
 THEMES = {
     "steelseries": {
         "BG_MAIN": "#16191E", "BG_SIDEBAR": "#1B1E22", "BG_CARD": "#1C2026",
@@ -347,6 +349,23 @@ def _chevron_icon(color: str, up: bool) -> str:
     return path.as_posix()
 
 
+def _ui_font_family() -> str:
+    """The family the whole UI is set in, as a QSS value.
+
+    Linux resolves the generic sans-serif through fontconfig. macOS has no
+    such alias: Qt builds its whole alias table to find one (about 200 ms at
+    startup, and a warning) and lands on the system UI font. Name that font
+    there instead. It needs a running application, which the module-level
+    APP_QSS below is built without.
+    """
+    if not IS_MACOS:
+        return 'sans-serif'
+    from PySide6.QtGui import QFontDatabase, QGuiApplication
+    if QGuiApplication.instance() is None:
+        return 'sans-serif'
+    return f'"{QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont).family()}"'
+
+
 def build_qss(theme_name: str) -> str:
     """Generate the full application QSS for the given theme name."""
     t = get_theme(theme_name)
@@ -389,7 +408,7 @@ def build_qss(theme_name: str) -> str:
 QWidget {{
     background-color: {BG_MAIN_};
     color: {TEXT_PRIMARY_};
-    font-family: sans-serif;
+    font-family: {_ui_font_family()};
     font-size: 11pt;
 }}
 

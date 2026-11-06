@@ -30,6 +30,7 @@ from arctis_sound_manager.constants import (PULSE_AUX_NODE_NAME,
                                             PULSE_GAME_NODE_NAME,
                                             PULSE_MEDIA_NODE_NAME,
                                             STEELSERIES_VENDOR_ID)
+from arctis_sound_manager.hidapi_transport import HidapiTransport, find_hidapi_paths
 from arctis_sound_manager.hidraw_transport import (USB_TRANSPORT_STATE_FILE, HidrawTransport,
                                                    find_hidraw_nodes)
 from arctis_sound_manager.loopback_manager import (LoopbackManager, make_specs,
@@ -44,6 +45,7 @@ from arctis_sound_manager.usb_reenumerate import (reset_via_usbfs,
                                                   refresh_libusb_context, sysfs_has_device)
 from arctis_sound_manager.utils import ObservableDict
 from arctis_sound_manager.oled_manager import OledManager
+from arctis_sound_manager.platform_support import AUDIO_SUPPORTED, IS_MACOS
 
 # How often (in seconds) the loop retries detection when the device was not
 # ready during the initial scan. A device present at boot fires no udev 'add'
@@ -143,10 +145,15 @@ def _wants_hidraw(engine) -> bool:
     return isinstance(choice, int) and not isinstance(choice, bool) and choice == _USB_TRANSPORT_HIDRAW
 
 
-def _active_hidraw(engine) -> 'HidrawTransport | None':
-    """The open hidraw transport, or None on the libusb path."""
+def _active_hidraw(engine) -> 'HidrawTransport | HidapiTransport | None':
+    """The open hidraw transport (hidapi on macOS), or None on the libusb path."""
     transport = getattr(engine, '_hidraw', None)
-    return transport if isinstance(transport, HidrawTransport) else None
+    return transport if isinstance(transport, (HidrawTransport, HidapiTransport)) else None
+
+
+#: Transports that leave the interfaces to the OS: nothing to claim, release
+#: or hand back to the kernel.
+_SHARED_HID_TRANSPORTS = ('hidraw', 'hidapi')
 
 
 # (product id, monotonic time) -> answer of udev_checker.hidraw_rules_cover().
@@ -430,12 +437,20 @@ class CoreEngine:
         self.general_settings = GeneralSettings.read_from_file()
 
         self.logger = logging.getLogger('CoreEngine')
-        self.pa_audio_manager = PulseAudioManager.get_instance()
+        if AUDIO_SUPPORTED:
+            self.pa_audio_manager = PulseAudioManager.get_instance()
+        else:
+            from arctis_sound_manager.audio_null import NullAudioManager
+            self.pa_audio_manager = cast(PulseAudioManager, NullAudioManager())
         self.usb_devices_monitor = USBDevicesMonitor.get_instance()
 
         # Dynamic loopback manager: owns the pw-loopback child processes for
         # Arctis_Game / Arctis_Chat / Arctis_Media virtual sinks.
-        self.loopback_manager = LoopbackManager()
+        if AUDIO_SUPPORTED:
+            self.loopback_manager = LoopbackManager()
+        else:
+            from arctis_sound_manager.audio_null import NullLoopbackManager
+            self.loopback_manager = cast(LoopbackManager, NullLoopbackManager())
 
         # Futures waiting on a specific reply opcode from listen_endpoint_loop
         # (e.g. read_hardware_eq()'s 0x32/0xA6 queries). Only that loop ever
@@ -1112,9 +1127,10 @@ class CoreEngine:
         (device attached) rebuilds the on-disk conf(s) and, only when something
         actually changed, restarts the ``filter-chain`` service to reload them.
         Runs off the D-Bus event loop (blocking restart). No-op when no device
-        is attached or when the confs already match the JSON.
+        is attached or when the confs already match the JSON, and where there
+        is no PipeWire (macOS).
         """
-        if not device_state.is_device_set():
+        if not AUDIO_SUPPORTED or not device_state.is_device_set():
             return
         if not self._spatial_apply_lock.acquire(blocking=False):
             # An apply is already restarting the filter-chain; it will pick up
@@ -1214,10 +1230,11 @@ class CoreEngine:
         regenerate_hesuvi_if_changed(), the same regen-without-restart half
         apply_spatial_audio_change() already builds on.
 
-        No-op when no device is attached. Returns whether anything changed
-        (informational only — the caller restarts unconditionally either way).
+        No-op when no device is attached, or with no PipeWire. Returns whether
+        anything changed (informational only — the caller restarts
+        unconditionally either way).
         """
-        if not device_state.is_device_set():
+        if not AUDIO_SUPPORTED or not device_state.is_device_set():
             return False
         try:
             from arctis_sound_manager.sonar_to_pipewire import regenerate_hesuvi_if_changed
@@ -2165,6 +2182,8 @@ class CoreEngine:
         self._main_event_loop = asyncio.get_running_loop()
         self.usb_devices_monitor.start()
         self.charging_case.scan()
+        if not AUDIO_SUPPORTED:
+            return self.loop()
 
         # Apply the configured quantum (#183) — including 0, which is what
         # makes this self-healing: if a previous run was killed before stop()
@@ -2209,7 +2228,7 @@ class CoreEngine:
         # Release the forced quantum (#183). It is a system-wide PipeWire
         # setting, so leaving it set would keep every other application on a
         # larger buffer for the rest of the session, long after ASM is gone.
-        if getattr(self.general_settings, 'pipewire_quantum', 0):
+        if AUDIO_SUPPORTED and getattr(self.general_settings, 'pipewire_quantum', 0):
             try:
                 from arctis_sound_manager.pw_utils import apply_force_quantum
                 apply_force_quantum(0)
@@ -2399,7 +2418,7 @@ class CoreEngine:
             # for its full timeout, and every failure path below backs off.
             await asyncio.sleep(0)
         except usb.core.USBError as e:
-            if isinstance(e, usb.core.USBTimeoutError) or e.errno == 110:  # ETIMEDOUT
+            if isinstance(e, usb.core.USBTimeoutError) or e.errno == errno.ETIMEDOUT:  # 110 on Linux, 60 on macOS
                 # A plain interrupt-read timeout is the NORMAL idle state — no
                 # frame was pending — not an error, so it must not be backed off
                 # from. The old 1 s sleep here left the endpoint deaf for a full
@@ -2467,7 +2486,7 @@ class CoreEngine:
                     self.logger.warning('EIO persists after re-acquisition attempt, forcing device reset')
                     self._eio_counts.pop(interface_id, None)
                     self.on_device_disconnected(0, 0)
-            elif e.errno == 75:  # EOVERFLOW — the device sent more than a packet
+            elif e.errno == errno.EOVERFLOW:  # the device sent more than a packet
                 self._on_listen_overflow(interface_id, e)
                 await asyncio.sleep(0.5)
             else:
@@ -2489,7 +2508,8 @@ class CoreEngine:
         # Unlike poll_task this is not tied to a connected headset: it watches
         # the audio graph, which outlives any single connection, and it must
         # not restart (and reset its once-per-session notice) on every replug.
-        xrun_task: asyncio.Task = asyncio.create_task(self._xrun_watch_loop())
+        xrun_task: asyncio.Task = asyncio.create_task(
+            self._xrun_watch_loop() if AUDIO_SUPPORTED else asyncio.sleep(0))
         last_rescan: float = 0.0
         while not self._stopping:
             if not self._device_ready:
@@ -2709,6 +2729,8 @@ class CoreEngine:
         Restores the EQ configs safe mode disabled, clears the latch and
         restarts the filter-chain. If the graph still genuinely crashes it
         re-arms safe mode. Returns True on success."""
+        if not AUDIO_SUPPORTED:
+            return False
         try:
             from arctis_sound_manager.sonar_to_pipewire import clear_safe_mode_and_restore
             clear_safe_mode_and_restore()
@@ -2959,6 +2981,17 @@ class CoreEngine:
                 self._usb_permission_attempt = 0
                 self._usb_permission_watching = False
 
+            if not AUDIO_SUPPORTED:
+                # No audio graph to build (macOS): straight to the headset.
+                device_state.set_current_device(
+                    physical_out_game="", physical_out_chat="", physical_in="",
+                    spatial_engine=device_config.spatial_engine,
+                    device_name=device_config.name,
+                    channel_label=device_config.channel_label,
+                )
+                deferred = self._start_device_init(device_config)
+                return
+
             # Discover ALSA nodes for this device and update shared device state
             physical_out_game, physical_out_chat, physical_in = self._discover_physical_nodes(
                 device_config.vendor_id,
@@ -3058,37 +3091,45 @@ class CoreEngine:
             self.setup_loopbacks()
             self._claim_default_source()
 
-            # SteelSeries' own GG engine waits this long after the USB
-            # transmitter (base station/dongle) enumerates before sending it
-            # any command at all — its `init-sleep-length`, up to 5s for the
-            # Nova Pro Omni/Elite/Wireless family, because the firmware is
-            # still booting. configure_virtual_sinks() runs on the pyudev
-            # observer thread (register_on_connect), which must not block —
-            # it is the single path for every USB hotplug event, not just
-            # this device's — so the wait is served by a timer instead of a
-            # plain time.sleep() here. _finish_configure_virtual_sinks() owns
-            # releasing _detect_lock and setting _device_configured_event
-            # once it runs; this method must not touch either on this path.
-            init_sleep = (device_config.init_sleep_length_ms or 0) / 1000
-            if init_sleep:
-                self.logger.info(
-                    "configure_virtual_sinks: waiting %.1fs for the transmitter "
-                    "to finish booting before init_device (init_sleep_length_ms)",
-                    init_sleep,
-                )
-                timer = threading.Timer(
-                    init_sleep, self._finish_configure_virtual_sinks, args=(device_config,))
-                timer.daemon = True
-                self._pending_init_timer = timer
-                deferred = True
-                timer.start()
-                return
-
-            self._finish_configure_virtual_sinks_body(device_config)
+            deferred = self._start_device_init(device_config)
         finally:
             if not deferred:
                 self._device_configured_event.set()
                 self._detect_lock.release()
+
+    def _start_device_init(self, device_config: DeviceConfiguration) -> bool:
+        """Send device_init now, or after the transmitter's boot delay.
+
+        Returns True when deferred to a timer, which then owns releasing
+        _detect_lock and setting _device_configured_event.
+        """
+        # SteelSeries' own GG engine waits this long after the USB
+        # transmitter (base station/dongle) enumerates before sending it
+        # any command at all — its `init-sleep-length`, up to 5s for the
+        # Nova Pro Omni/Elite/Wireless family, because the firmware is
+        # still booting. configure_virtual_sinks() runs on the pyudev
+        # observer thread (register_on_connect), which must not block —
+        # it is the single path for every USB hotplug event, not just
+        # this device's — so the wait is served by a timer instead of a
+        # plain time.sleep() here. _finish_configure_virtual_sinks() owns
+        # releasing _detect_lock and setting _device_configured_event
+        # once it runs; this method must not touch either on this path.
+        init_sleep = (device_config.init_sleep_length_ms or 0) / 1000
+        if init_sleep:
+            self.logger.info(
+                "configure_virtual_sinks: waiting %.1fs for the transmitter "
+                "to finish booting before init_device (init_sleep_length_ms)",
+                init_sleep,
+            )
+            timer = threading.Timer(
+                init_sleep, self._finish_configure_virtual_sinks, args=(device_config,))
+            timer.daemon = True
+            self._pending_init_timer = timer
+            timer.start()
+            return True
+
+        self._finish_configure_virtual_sinks_body(device_config)
+        return False
 
     def _finish_configure_virtual_sinks(self, device_config: DeviceConfiguration) -> None:
         """Timer callback for the init_sleep_length_ms deferral above.
@@ -4729,7 +4770,17 @@ class CoreEngine:
         the kernel keeps the interfaces and ASM opens their /dev/hidraw*
         nodes instead (_open_hidraw). If that fails, this falls through to
         the libusb claim below, so the headset still works.
+
+        On macOS there is neither: the OS keeps the interfaces and hidapi is
+        the only way in, with no libusb fallback (_open_hidapi).
         """
+        if IS_MACOS:
+            if self._open_hidapi(usb_device, config):
+                self.permission_error = False
+                self._record_usb_transport('hidapi', None)
+                return True
+            self._record_usb_transport('none', getattr(self, '_hidraw_failure', None))
+            return False
         if _wants_hidraw(self) and not _hidraw_rules_allow(self, usb_device):
             # Rules from before 1.7.0: the node would stay root 0600. Trying
             # anyway hands the interface to the kernel driver and takes it back
@@ -5212,6 +5263,33 @@ class CoreEngine:
         self.logger.info("Using the hidraw transport for %s: %s", config.name, self._hidraw.describe())
         return True
 
+    def _open_hidapi(self, usb_device: TypedDevice, config: DeviceConfiguration) -> bool:
+        """Open the headset's HID interfaces through hidapi (macOS)."""
+        self._close_hidraw()
+        self._hidraw_failure = None
+        interfaces = self._hidraw_interfaces(config)
+        command = self._command_interface_number()
+        try:
+            paths = find_hidapi_paths(usb_device.idVendor, usb_device.idProduct, interfaces)
+        except ImportError as e:
+            self._hidraw_failure = f"hidapi is not installed ({e})"
+            self.logger.error("hidapi: %s — run `uv sync` to install it.", self._hidraw_failure)
+            return False
+        if command not in paths:
+            self._hidraw_failure = f"no HID device for command interface {command}"
+            self.logger.warning("hidapi: no HID device for command interface %d (found: %s)",
+                                command, ", ".join(str(i) for i in sorted(paths)) or "none")
+            return False
+        try:
+            self._hidraw = HidapiTransport(paths, usb_device.idVendor, usb_device.idProduct)
+        except OSError as e:
+            self._hidraw_failure = str(e)
+            self.logger.warning("hidapi: %s", e)
+            return False
+        self.usb_transport_active = 'hidapi'
+        self.logger.info("Using the hidapi transport for %s: %s", config.name, self._hidraw.describe())
+        return True
+
     def _record_usb_transport(self, active: str, fallback_reason: str | None) -> None:
         """Write which transport is talking to the headset, for the bug report.
 
@@ -5221,7 +5299,7 @@ class CoreEngine:
         """
         hidraw = _active_hidraw(self)
         state = {
-            'chosen': 'hidraw' if _wants_hidraw(self) else 'libusb',
+            'chosen': 'hidapi' if IS_MACOS else 'hidraw' if _wants_hidraw(self) else 'libusb',
             'active': active,
             'fallback_reason': fallback_reason,
             'device': self.device_config.name if self.device_config else None,
@@ -5265,7 +5343,7 @@ class CoreEngine:
         if _active_hidraw(self) is not None:
             self._close_hidraw()
             return
-        if getattr(self, 'usb_transport_active', 'libusb') == 'hidraw':
+        if getattr(self, 'usb_transport_active', 'libusb') in _SHARED_HID_TRANSPORTS:
             return
         for interface in self._all_used_interfaces(config):
             try:
@@ -5276,7 +5354,7 @@ class CoreEngine:
 
     def kernel_attach(self, usb_device: TypedDevice, config: DeviceConfiguration) -> bool:
         """Re-attach the kernel driver. Returns False on USB error (best effort)."""
-        if getattr(self, 'usb_transport_active', 'libusb') == 'hidraw':
+        if getattr(self, 'usb_transport_active', 'libusb') in _SHARED_HID_TRANSPORTS:
             # The kernel driver was never detached.
             return True
         self.logger.info(f"Re-attaching kernel driver for device: {usb_device.idProduct:04x}:{usb_device.idVendor:04x} ({config.name})")
@@ -5428,20 +5506,13 @@ class CoreEngine:
 
     def _notify_xruns(self) -> None:
         """Tell the user once, and say what to do about it."""
-        import subprocess
-        try:
-            subprocess.run(
-                ["notify-send", "-a", "Arctis Sound Manager",
-                 "Audio glitches detected",
-                 "The Spatial Audio processing is struggling to keep up, which "
-                 "sounds like crackling. Settings → Audio stability (buffer "
-                 "size) can fix it, at the cost of slightly more latency."],
-                check=False, timeout=5,
-            )
-        except Exception as exc:
-            # notify-send is optional — a headless or minimal session simply
-            # gets the log line instead.
-            self.logger.debug("notify-send unavailable: %r", exc)
+        from arctis_sound_manager.platform_support import notify
+        # Best effort — a headless or minimal session simply gets the log
+        # line instead.
+        notify("Audio glitches detected",
+               "The Spatial Audio processing is struggling to keep up, which "
+               "sounds like crackling. Settings → Audio stability (buffer "
+               "size) can fix it, at the cost of slightly more latency.")
 
     # Status-poll error reporting (#198) ──────────────────────────────────────
     #
@@ -5466,7 +5537,7 @@ class CoreEngine:
 
         if streak == 1 or streak % self._STATUS_POLL_LOG_EVERY == 0:
             hint = ""
-            if errno_val == 110:
+            if errno_val == errno.ETIMEDOUT:
                 # The one worth explaining: nothing is wrong with the cable or
                 # the permissions, the device simply never answers.
                 hint = (" — the device is not answering status requests, so no "

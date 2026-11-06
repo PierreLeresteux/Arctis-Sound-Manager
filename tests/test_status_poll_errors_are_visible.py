@@ -16,6 +16,7 @@ lasts, once when it clears.
 """
 from __future__ import annotations
 
+import errno
 import logging
 
 import pytest
@@ -36,7 +37,7 @@ class _Engine:
 
 
 def _timeout() -> usb.core.USBError:
-    return usb.core.USBError("Operation timed out", errno=110)
+    return usb.core.USBError("Operation timed out", errno=errno.ETIMEDOUT)
 
 
 def test_the_first_timeout_is_reported(caplog) -> None:
