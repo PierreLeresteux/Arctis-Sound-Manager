@@ -8,6 +8,10 @@ ASM runs on macOS for **headset control** and the **equaliser**. The other audio
 - **Headset status**: battery, power state, the ChatMix dial position.
 - **DAC page and OLED**: on base stations that have them. With **Turn screen off while the session is locked or idle**, the base's screen goes dark while the Mac is locked, its display asleep, or nobody has used the keyboard or mouse for 5 minutes.
 - **Sleep**: after the Mac wakes, ASM takes the headset back and sends its settings again, as after a replug.
+- **The Mac's output follows the headset** (Settings › Audio Routing):
+  - **Redirect Audio on Connect** (on by default) makes the headset the Mac's output when it comes online, or the equaliser's BlackHole while the equaliser runs;
+  - **Redirect Audio on Disconnect** moves the output to the device picked below it when the headset goes off, or to the Mac's own speakers when none is picked or it is unplugged. An output you already moved elsewhere is left alone.
+- **Generic mode** (Settings › Generic Device): ASM without a SteelSeries headset. Pick the output, and optionally the microphone, under it: the equaliser and the Micro tab then run on them as on a headset, when their own **Play on** and **Microphone** are left on automatic.
 - **Equaliser** (Equalizer page), see [Equaliser](#equaliser):
   - the headset's own 10-band EQ (Custom EQ), on headsets that have one (Arctis Nova family, GameBuds);
   - the Sonar EQ on the Mac's sound, on every headset: parametric curve, Sonar presets, Bass / Voice / Treble, Boost, Smart Volume and Spatial Audio, for stereo and 5.1 / 7.1 sources;

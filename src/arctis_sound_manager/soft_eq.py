@@ -168,14 +168,15 @@ def spatial_settings() -> dict | None:
 
 def _pick_headset(devices: list[coreaudio.AudioDevice], wanted: str,
                   prefer: str) -> coreaudio.AudioDevice | None:
-    """The device the user chose, else the headset's, *prefer* side first.
+    """The device the user chose (by name or UID), else the headset's,
+    *prefer* side first.
 
     The headset is a name with Arctis or SteelSeries in it; models with a
     game and a chat device list both.
     """
     candidates = [d for d in devices if d.name not in LOOPBACKS]
     if wanted:
-        return next((d for d in candidates if d.name == wanted), None)
+        return next((d for d in candidates if wanted in (d.name, d.uid)), None)
     headsets = [d for d in candidates if any(w in d.name.lower() for w in _HEADSET_WORDS)]
     headsets.sort(key=lambda d: prefer not in d.name.lower())
     return headsets[0] if headsets else None
@@ -360,7 +361,7 @@ class _OutputRoute(_Route):
             self.status['layout'] = ''
 
     def physical(self, config, devices):
-        wanted = config['output_device']
+        wanted = config['output_device'] or self.engine._fallback_output()
         found = pick_output(devices['output'], wanted)
         return found, ('Headset output not found' if not wanted else f'Output not found: {wanted}')
 
@@ -415,7 +416,7 @@ class _MicRoute(_Route):
         return loopbacks(config)[1]
 
     def physical(self, config, devices):
-        wanted = config['mic_input_device']
+        wanted = config['mic_input_device'] or self.engine._fallback_mic()
         found = pick_mic(devices['input'], wanted)
         return found, ('Headset microphone not found' if not wanted
                        else f'Microphone not found: {wanted}')
@@ -447,10 +448,15 @@ class SoftEqEngine:
     swapped as one tuple.
     """
 
-    def __init__(self, sounddevice=None, ca=coreaudio, hrir_id=lambda: None):
+    def __init__(self, sounddevice=None, ca=coreaudio, hrir_id=lambda: None,
+                 fallback_output=lambda: '', fallback_mic=lambda: ''):
         self._sd = sounddevice
         self._ca = ca
         self._hrir_id = hrir_id
+        # Where to play, and listen, when "Play on" / "Microphone" are left on
+        # automatic and there is no headset to find: generic mode's devices.
+        self._fallback_output = fallback_output
+        self._fallback_mic = fallback_mic
         self._hrir_path = None
         self._chain = (StereoBiquads(build_chain([], 0, 0, 0)[0]), 1.0, None, Renderer())
         self._mic_chain = (StereoBiquads(np.zeros((0, 6)), channels=1), 1.0, None, None)

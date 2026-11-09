@@ -19,6 +19,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _linux(monkeypatch):
+    """These tests are about the PipeWire channels: on a Mac running the
+    suite, generic mode would take the CoreAudio path (test_macos_routing)."""
+    from arctis_sound_manager import core
+    monkeypatch.setattr(core, "IS_MACOS", False)
+    monkeypatch.setattr(core, "AUDIO_SUPPORTED", True)
+
+
 # ── nothing changes for a SteelSeries headset ─────────────────────────────────
 
 def test_the_generic_profile_can_never_be_picked_by_the_usb_scan():

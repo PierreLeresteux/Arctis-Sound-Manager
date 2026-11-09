@@ -20,6 +20,15 @@ import pytest
 from arctis_sound_manager.settings import GeneralSettings
 
 
+
+@pytest.fixture(autouse=True)
+def _linux(monkeypatch):
+    """PipeWire's sinks: on macOS the Mac's output is moved instead
+    (test_macos_routing)."""
+    from arctis_sound_manager import core
+    monkeypatch.setattr(core, "IS_MACOS", False)
+
+
 def _config(name):
     return {c.name: c for c in [*GeneralSettings.settings_config,
                                 *GeneralSettings.dac_settings_config]}[name]

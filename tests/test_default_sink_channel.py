@@ -20,6 +20,8 @@ from __future__ import annotations
 import threading
 from unittest.mock import MagicMock
 
+import pytest
+
 from arctis_sound_manager.constants import (PULSE_CHAT_NODE_NAME,
                                             PULSE_GAME_NODE_NAME,
                                             PULSE_MEDIA_NODE_NAME)
@@ -37,6 +39,14 @@ def test_the_three_channels_are_distinct_sinks():
 
 
 # ── The system default ────────────────────────────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def _linux(monkeypatch):
+    """PipeWire channels: on macOS the Mac's output is moved instead
+    (test_macos_routing)."""
+    from arctis_sound_manager import core
+    monkeypatch.setattr(core, "IS_MACOS", False)
+
 
 def _make_engine(*, online: bool = True, on_connect: bool = True, channel: int = 0):
     from arctis_sound_manager.core import CoreEngine

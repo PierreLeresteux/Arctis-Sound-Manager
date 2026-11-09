@@ -25,7 +25,7 @@ from arctis_sound_manager.constants import (DBUS_BUS_NAME,
                                             DBUS_STATUS_INTERFACE_NAME,
                                             DBUS_STATUS_OBJECT_PATH)
 from arctis_sound_manager.core import CoreEngine
-from arctis_sound_manager.platform_support import AUDIO_SUPPORTED
+from arctis_sound_manager.platform_support import AUDIO_SUPPORTED, IS_MACOS
 from arctis_sound_manager.pactl import TypedPulseSinkInfo
 from arctis_sound_manager.settings import validate_config_setting_value
 from arctis_sound_manager import device_state
@@ -715,6 +715,16 @@ class ArctisManagerDbusSettingsService(ServiceInterface):
                     daemon=True,
                 ).start()
 
+            if IS_MACOS and setting in ('generic_device_mode', 'generic_output_device',
+                                        'generic_input_device'):
+                # Take the generic device, or drop it, now rather than at the
+                # next start (core._setup_generic_device).
+                threading.Thread(
+                    target=self.core_engine.configure_virtual_sinks,
+                    name='asm-generic-mode-switch',
+                    daemon=True,
+                ).start()
+
             if setting == 'preferred_device':
                 # Apply the new preference right away instead of waiting for the
                 # next daemon start (issue #199, part 3). configure_virtual_sinks()
@@ -835,7 +845,13 @@ class ArctisManagerDbusSettingsService(ServiceInterface):
     @method('GetListOptions')
     def get_list_options(self, list_name: 's') -> 's': # type: ignore
         result = []
-        if list_name in ('pulse_audio_devices', 'external_audio_devices'):
+        if IS_MACOS and list_name in ('pulse_audio_devices', 'external_audio_devices',
+                                      'pulse_audio_sources'):
+            # CoreAudio's devices, by UID: no PipeWire sinks or sources here.
+            from arctis_sound_manager import macos_routing
+            result = macos_routing.choices(
+                'input' if list_name == 'pulse_audio_sources' else 'output')
+        elif list_name in ('pulse_audio_devices', 'external_audio_devices'):
             result = build_sink_options(
                 self.core_engine.pa_audio_manager.sink_list_wrapper(), list_name)
         elif list_name == 'hrir_files':

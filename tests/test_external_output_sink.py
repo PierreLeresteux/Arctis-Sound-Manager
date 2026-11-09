@@ -100,11 +100,15 @@ def _dbus_sink(props):
     return s
 
 
-def test_get_list_options_bluetooth_without_nick_uses_node_name():
+def test_get_list_options_bluetooth_without_nick_uses_node_name(monkeypatch):
     import json
     from unittest.mock import MagicMock
 
+    from arctis_sound_manager import dbus_service
     from arctis_sound_manager.dbus_service import ArctisManagerDbusSettingsService
+
+    # PipeWire's sinks: on macOS the lists come from CoreAudio instead.
+    monkeypatch.setattr(dbus_service, "IS_MACOS", False)
 
     svc = ArctisManagerDbusSettingsService.__new__(ArctisManagerDbusSettingsService)
     svc.core_engine = MagicMock()

@@ -2787,10 +2787,14 @@ class CoreEngine:
 
         Settings store whichever id the picker offered — a ``node.nick`` from
         the Channels tab, a ``node.name`` elsewhere — so both are matched, the
-        same rule the rest of the app follows.
+        same rule the rest of the app follows. On macOS, a CoreAudio UID into
+        the output's name.
         """
         if not wanted:
             return None
+        if IS_MACOS:
+            from arctis_sound_manager import macos_routing
+            return macos_routing.resolve(wanted, 'output')
         try:
             import pulsectl
             with pulsectl.Pulse("asm-generic-resolve") as pulse:
@@ -2853,8 +2857,12 @@ class CoreEngine:
         self.device_status = None
         self.device_settings = None     # nor any headset settings to hold
 
-        source = self._resolve_sink_name(
-            getattr(settings, "generic_input_device", None) or "")
+        source_id = getattr(settings, "generic_input_device", None) or ""
+        if IS_MACOS:
+            from arctis_sound_manager import macos_routing
+            source = macos_routing.resolve(source_id, 'input') if source_id else None
+        else:
+            source = self._resolve_sink_name(source_id)
 
         # Game and Chat share one sink here. A real Arctis exposes two PCMs and
         # ASM separates them; a generic headset has one output, so both channels
@@ -2872,6 +2880,13 @@ class CoreEngine:
         self.logger.info(
             "Generic mode: channels on %s%s", sink,
             f", microphone from {source}" if source else ", no microphone configured")
+
+        if not AUDIO_SUPPORTED:
+            # macOS: no PipeWire graph to build. The software equaliser plays
+            # on this device, as on a headset (soft_eq's fallback_output).
+            self.redirect_to_media_sink()
+            self._device_ready = True
+            return True
 
         try:
             from arctis_sound_manager.sonar_to_pipewire import check_and_fix_stale_configs
@@ -2935,6 +2950,10 @@ class CoreEngine:
                 # Generic mode does without it, on a sink the user names (#189).
                 if self._setup_generic_device():
                     return
+                if not AUDIO_SUPPORTED and getattr(self.device_config, 'generic', False):
+                    # Generic mode turned off on macOS: drop its device now,
+                    # rather than at the next start.
+                    self.teardown()
                 # Log only on the first miss to avoid spamming every re-scan cycle.
                 if not self._logged_no_device:
                     self.logger.warning("No supported device connected, skipping virtual sink setup")
@@ -4004,6 +4023,9 @@ class CoreEngine:
         """
         if not self.general_settings.redirect_audio_on_connect or not self.is_device_online():
             return
+        if IS_MACOS:
+            self._macos_take_default()
+            return
 
         channel_index = getattr(self.general_settings, 'redirect_audio_on_connect_channel', 0) or 0
         try:
@@ -4062,6 +4084,9 @@ class CoreEngine:
     def redirect_audio_on_disconnect(self):
         if not self.general_settings.redirect_audio_on_disconnect:
             return
+        if IS_MACOS:
+            self._macos_leave_default()
+            return
         redirect_device = self.general_settings.redirect_audio_on_disconnect_device
         if not redirect_device:
             # The toggle is a separate setting from the device it redirects to,
@@ -4099,6 +4124,33 @@ class CoreEngine:
 
         if is_steelseries_alsa or is_arctis_owned:
             self.pa_audio_manager.redirect_audio(redirect_device)
+
+    def _macos_take_default(self) -> None:
+        """The Mac's output to the headset, or to the software equaliser's
+        BlackHole while it runs (macos_routing.take_default)."""
+        from arctis_sound_manager import macos_routing
+        from arctis_sound_manager.soft_eq import load_config
+        engine = getattr(self, 'soft_eq', None)
+        status = engine.output.status if engine is not None else {}
+        loopback = status.get('loopback', '') if status.get('running') else ''
+        # The equaliser's "Play on", else generic mode's device, else the headset.
+        wanted = load_config()['output_device'] or device_state.get_physical_out_game()
+        try:
+            macos_routing.take_default(loopback, wanted)
+        except OSError as exc:
+            self.logger.warning("could not move the Mac's output to the headset: %r", exc)
+
+    def _macos_leave_default(self) -> None:
+        """The Mac's output off the headset, to the device picked in Settings
+        (macos_routing.leave_default)."""
+        from arctis_sound_manager import macos_routing
+        generic = device_state.get_physical_out_game()
+        try:
+            macos_routing.leave_default(
+                self.general_settings.redirect_audio_on_disconnect_device or '',
+                also=(generic,) if generic else ())
+        except OSError as exc:
+            self.logger.warning("could not move the Mac's output off the headset: %r", exc)
 
     def _fallback_disconnect_sink(self) -> str | None:
         """Best sink to fall back to when no redirect device was configured.

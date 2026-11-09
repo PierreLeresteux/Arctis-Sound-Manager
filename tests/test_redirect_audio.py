@@ -20,6 +20,15 @@ import pytest
 
 # ── helpers ────────────────────────────────────────────────────────────────
 
+
+@pytest.fixture(autouse=True)
+def _linux(monkeypatch):
+    """PipeWire's sinks: on macOS the Mac's output is moved instead
+    (test_macos_routing)."""
+    from arctis_sound_manager import core
+    monkeypatch.setattr(core, "IS_MACOS", False)
+
+
 def _make_sink(node_name, index, vendor_id_hex='', nick=''):
     s = MagicMock()
     s.name = node_name

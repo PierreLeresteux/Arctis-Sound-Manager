@@ -167,6 +167,20 @@ def output_devices() -> list[AudioDevice]:
     return devices('output')
 
 
+_TRANSPORT_TYPE = _fourcc('tran')
+#: kAudioDeviceTransportTypeBuiltIn: the Mac's own speakers, jack and mic.
+TRANSPORT_BUILT_IN = _fourcc('bltn')
+
+
+def transport_type(device_id: int) -> int:
+    """How the device is attached, as a CoreAudio four-char code ('bltn',
+    'usb ', 'blue'...), 0 when the device does not say."""
+    try:
+        return struct.unpack('I', _get(device_id, _TRANSPORT_TYPE))[0]
+    except (CoreAudioError, struct.error):
+        return 0
+
+
 # ── Speaker layout ────────────────────────────────────────────────────────────
 
 _PREFERRED_LAYOUT = _fourcc('srnd')

@@ -293,8 +293,12 @@ async def main_async():
     if IS_MACOS:
         # The Sonar EQ on the system's sound, through BlackHole (soft_eq.py).
         from arctis_sound_manager.soft_eq import SoftEqEngine
+        from arctis_sound_manager import device_state
         core_engine.soft_eq = SoftEqEngine(
-            hrir_id=lambda: core_engine.general_settings.hrir_id)
+            hrir_id=lambda: core_engine.general_settings.hrir_id,
+            # Set only in generic mode on macOS: the devices it plays on.
+            fallback_output=device_state.get_physical_out_game,
+            fallback_mic=device_state.get_physical_in)
         tasks.append(asyncio.create_task(core_engine.soft_eq.run(), name='soft-eq'))
         # Sleep and wake, which logind tells on Linux: IOKit here. The same
         # CoreEngine calls, so the headset is re-acquired and its settings

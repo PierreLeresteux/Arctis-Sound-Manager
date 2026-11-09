@@ -358,8 +358,16 @@ class DevicePage(QWidget):
             self._add_settings_group(self._add_card(content_layout, "settings_group_micro"), _MICRO_KEYS)
             self._add_settings_group(self._add_card(content_layout, "settings_group_generic"), _GENERIC_KEYS)
         elif IS_MACOS:
-            # The macOS soft EQ's Spatial Audio has its HRIR to choose.
-            self._add_settings_group(self._add_card(content_layout, "settings_group_audio"), ('hrir_id',))
+            # No channels to pick between, no external output for a Home page
+            # there is not, no PipeWire quantum: the Mac's default output is
+            # moved as the headset comes and goes (macos_routing), and the
+            # software equaliser's Spatial Audio has its HRIR to choose.
+            self._add_settings_group(self._add_card(content_layout, "settings_group_audio"), (
+                'redirect_audio_on_connect', 'redirect_audio_on_disconnect',
+                'redirect_audio_on_disconnect_device', 'hrir_id'))
+            # No usb_transport: hidapi is the only way in.
+            self._add_settings_group(self._add_card(content_layout, "settings_group_generic"), (
+                'generic_device_mode', 'generic_output_device', 'generic_input_device'))
 
         content_layout.addStretch(1)
 
