@@ -37,6 +37,7 @@ from arctis_sound_manager.gui.components import (
     SETTINGS_ICON,
     SidebarButton,
 )
+from arctis_sound_manager.gui import tooltip_style
 from arctis_sound_manager.gui.dbus_wrapper import DbusWrapper
 from arctis_sound_manager.gui.dac_page import DacPage
 from arctis_sound_manager.gui.device_page import DevicePage
@@ -159,6 +160,8 @@ class QMainApp(QBaseDesktopApp):
         set_active_theme(self._general_settings.theme)
         # Apply global dark stylesheet with saved theme
         app.setStyleSheet(build_qss(self._general_settings.theme))
+        # Tooltips take their widget's stylesheets too: keep them on the theme.
+        self._tooltip_styler = tooltip_style.install(app, self._general_settings.theme)
 
         # D-Bus wrapper
         self.dbus_wrapper = DbusWrapper()
@@ -243,6 +246,7 @@ class QMainApp(QBaseDesktopApp):
         set_active_theme(theme_name)
         t = get_theme(theme_name)
         self.app.setStyleSheet(build_qss(theme_name))
+        self._tooltip_styler.set_theme(theme_name)
         for btn in self._sidebar_buttons:
             btn.update_colors(t)
         # Propagate to every page that implements apply_theme

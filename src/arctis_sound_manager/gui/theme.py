@@ -366,6 +366,21 @@ def _ui_font_family() -> str:
     return f'"{QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont).family()}"'
 
 
+def tooltip_qss(theme_name: str) -> str:
+    """The tooltip rule: the theme's card background and text."""
+    t = get_theme(theme_name)
+    return (
+        "QToolTip {\n"
+        f"    background-color: {t['BG_CARD']};\n"
+        f"    color: {t['TEXT_PRIMARY']};\n"
+        f"    border: 1px solid {t['BORDER']};\n"
+        "    border-radius: 6px;\n"
+        "    padding: 6px 8px;\n"
+        "    font-size: 10pt;\n"
+        "}"
+    )
+
+
 def build_qss(theme_name: str) -> str:
     """Generate the full application QSS for the given theme name."""
     t = get_theme(theme_name)
@@ -427,15 +442,9 @@ QLabel {{
 /* Without an explicit rule, a tooltip inherits the QWidget background above
    but takes its text colour from the platform palette. On a dark theme under
    GNOME/Wayland that lands as dark-on-dark: the mixer help popup showed up as
-   a plain black rectangle with nothing readable in it (#146). */
-QToolTip {{
-    background-color: {BG_CARD_};
-    color: {TEXT_PRIMARY_};
-    border: 1px solid {BORDER_};
-    border-radius: 6px;
-    padding: 6px 8px;
-    font-size: 10pt;
-}}
+   a plain black rectangle with nothing readable in it (#146). The same rule
+   is also set on each tooltip itself (gui/tooltip_style.py). */
+{tooltip_qss(theme_name)}
 
 /* ── Regular push buttons ── */
 QPushButton {{
