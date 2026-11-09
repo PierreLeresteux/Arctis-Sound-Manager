@@ -250,6 +250,11 @@ def detect_current_game() -> DetectedGame | None:
     Strict stream detection first (the game is already playing sound), then
     the audio-server clients (the game just launched and is still silent).
     """
+    from arctis_sound_manager.platform_support import IS_MACOS
+    if IS_MACOS:
+        # No audio graph to find it by: the running processes (macos_games).
+        from arctis_sound_manager import macos_games
+        return macos_games.detect_current_game()
     from arctis_sound_manager.clip_capture import (
         detect_game_process, process_environ_dict)
     found = detect_game_process(strict=True) or _detect_game_client()

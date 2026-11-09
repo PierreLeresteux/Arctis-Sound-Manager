@@ -15,7 +15,8 @@ ASM runs on macOS for **headset control** and the **equaliser**. The other audio
 - **Equaliser** (Equalizer page), see [Equaliser](#equaliser):
   - the headset's own 10-band EQ (Custom EQ), on headsets that have one (Arctis Nova family, GameBuds);
   - the Sonar EQ on the Mac's sound, on every headset: parametric curve, Sonar presets, Bass / Voice / Treble, Boost, Smart Volume and Spatial Audio, for stereo and 5.1 / 7.1 sources;
-  - the Micro channel on the headset's microphone: curve, presets, noise reduction, noise gate and compressor.
+  - the Micro channel on the headset's microphone: curve, presets, noise reduction, noise gate and compressor;
+  - **Automatic preset per game**, see [below](#automatic-preset-per-game).
 - **Tray**: battery and status in the menu bar, and the Sonar presets.
 - **CLI**: `asm-cli status` and the `asm-cli tools` probes.
 
@@ -182,6 +183,29 @@ The Equalizer page works as on Linux, with what macOS allows:
   BlackHole 16ch. Turning it off puts the input back, as for the output. The headset's ChatMix dial and its
   chat output are not affected: only the system output goes through the
   EQ.
+
+## Automatic preset per game
+
+**Automatic preset per game**, at the top of the Sonar EQ, applies a Game
+tab preset while a game runs, as on Linux: the preset named like the game,
+or the one you pick for it in the menu bar (**Preset for <game>**). A
+preset you pick by hand while the game runs is remembered for it.
+
+macOS cannot tell which app is playing sound, so ASM looks at the running
+apps instead:
+
+- a **Steam game**: anything running from a Steam library's
+  `steamapps/common` folder. It is known by its Steam id, as on Linux, so a
+  preset tied to a game on one follows it on the other;
+- any other **app filed under Games** (its `LSApplicationCategoryType`):
+  Mac App Store and Apple Arcade games, and most games sold outside the
+  store.
+
+Launchers that file themselves under Games (Steam, Apple's Games app,
+Epic, Battle.net, GOG Galaxy, Heroic) and cloud or remote play clients
+(GeForce NOW, Parsec) are left out. Windows games run through CrossOver
+or Whisky are not recognised. The preset changes without cutting the
+sound.
 
 ## Build the app
 

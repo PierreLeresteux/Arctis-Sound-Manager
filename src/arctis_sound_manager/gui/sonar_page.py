@@ -4085,10 +4085,13 @@ class _AutoGamePresetBar(QFrame):
         row.addWidget(self._title)
         row.addStretch(1)
 
-        self._hint = QLabel(_t("auto_game_preset_hint"))
+        # The Mac's soft EQ takes a new curve without a restart, and games
+        # are found among the running apps rather than by their sound.
+        hint = _t("auto_game_preset_hint_macos" if IS_MACOS else "auto_game_preset_hint")
+        self._hint = QLabel(hint)
         self._hint.setWordWrap(True)
         row.addWidget(self._hint, 2)
-        self.setToolTip(_t("auto_game_preset_hint"))
+        self.setToolTip(hint)
         self.apply_theme()
 
     def _on_changed(self, *_args) -> None:
@@ -4333,7 +4336,8 @@ class SonarPage(QWidget):
         """The Mac's sound and microphone, run by the daemon's soft EQ.
 
         No per-app channels, output routing or screen-share guard: those
-        are PipeWire's. The soft EQ runs the Game tab's curve on the Mac's
+        are PipeWire's. The automatic preset per game stays: it applies to
+        the Game tab, which is the Mac's sound here. The soft EQ runs the Game tab's curve on the Mac's
         sound and the Micro tab's on the microphone, so those are the tabs
         left, under the soft EQ's switches.
         """
@@ -4344,8 +4348,7 @@ class SonarPage(QWidget):
         # Its device comes from the soft EQ's microphone picker instead.
         self._micro_source.setVisible(False)
         self._safe_mode_timer.stop()
-        for widget in (self._safe_mode_banner, self._stream_guard_bar,
-                       self._auto_game_preset_bar):
+        for widget in (self._safe_mode_banner, self._stream_guard_bar):
             widget.setVisible(False)
         for selector in (self._output_selector, self._game_output_selector,
                          self._chat_output_selector, self._media_output_selector,

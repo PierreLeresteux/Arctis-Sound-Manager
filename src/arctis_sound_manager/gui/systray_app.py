@@ -186,10 +186,11 @@ class QSystrayApp(QBaseDesktopApp):
 
         # Automatic Sonar Game preset per detected game (opt-in; the toggle on
         # the Sonar page is read from disk each tick, so no cross-widget wiring).
-        # Games are told apart by their PipeWire streams: none on macOS.
+        # Games are told apart by their PipeWire streams on Linux, by the
+        # running processes on macOS (macos_games).
         self._game_preset_watcher = None
         try:
-            if AUDIO_SUPPORTED:
+            if AUDIO_SUPPORTED or IS_MACOS:
                 from arctis_sound_manager.gui.game_preset_watcher import GamePresetWatcher
                 self._game_preset_watcher = GamePresetWatcher(self._sonar_applier, self)
                 self._game_preset_watcher.notify.connect(self._on_game_preset_notify)
