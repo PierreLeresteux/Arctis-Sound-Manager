@@ -18,6 +18,9 @@ Two questions the DAC screen needs answered and nothing else in the daemon asks:
   - ``org.freedesktop.ScreenSaver.GetActive`` on the session bus: the one
     signal lighter desktops without a logind-aware locker still provide.
 
+  On macOS, where there is no logind, macos_system answers instead: the
+  screen locked, the display asleep, or no input for five minutes.
+
   ``GetSessionIdleTime`` is deliberately not used: KDE on Wayland refuses it
   ("not supported on this platform"), and the spec leaves its unit ambiguous.
 
@@ -39,6 +42,8 @@ from typing import Any
 
 from dbus_next import BusType, Message, MessageType
 from dbus_next.aio import MessageBus
+
+from arctis_sound_manager.platform_support import IS_MACOS
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +105,10 @@ class DesktopSession:
 
     def user_away(self) -> bool:
         """True when the session is locked or reported idle."""
+        if IS_MACOS:
+            # No logind there: macOS answers directly, without D-Bus.
+            from arctis_sound_manager import macos_system
+            return macos_system.user_away()
         return self._run(self._user_away(), default=False)
 
     def close(self) -> None:

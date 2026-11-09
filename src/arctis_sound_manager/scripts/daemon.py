@@ -296,6 +296,14 @@ async def main_async():
         core_engine.soft_eq = SoftEqEngine(
             hrir_id=lambda: core_engine.general_settings.hrir_id)
         tasks.append(asyncio.create_task(core_engine.soft_eq.run(), name='soft-eq'))
+        # Sleep and wake, which logind tells on Linux: IOKit here. The same
+        # CoreEngine calls, so the headset is re-acquired and its settings
+        # sent again after the Mac wakes.
+        from arctis_sound_manager.macos_system import SystemPowerWatcher
+        power_watcher = SystemPowerWatcher(asyncio.get_running_loop(),
+                                           core_engine.prepare_for_sleep,
+                                           core_engine.resume_from_sleep)
+        power_watcher.start()
 
     # Wire SIGINT/SIGTERM into the asyncio loop so the handler can both flip
     # the stop flags AND cancel the long-lived tasks. Plain signal.signal()

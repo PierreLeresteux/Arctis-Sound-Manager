@@ -6,7 +6,8 @@ ASM runs on macOS for **headset control** and the **equaliser**. The other audio
 
 - **Headset settings**: sidetone, mic volume, auto shutdown, and the other settings on the Headset page.
 - **Headset status**: battery, power state, the ChatMix dial position.
-- **DAC page and OLED**: on base stations that have them.
+- **DAC page and OLED**: on base stations that have them. With **Turn screen off while the session is locked or idle**, the base's screen goes dark while the Mac is locked, its display asleep, or nobody has used the keyboard or mouse for 5 minutes.
+- **Sleep**: after the Mac wakes, ASM takes the headset back and sends its settings again, as after a replug.
 - **Equaliser** (Equalizer page), see [Equaliser](#equaliser):
   - the headset's own 10-band EQ (Custom EQ), on headsets that have one (Arctis Nova family, GameBuds);
   - the Sonar EQ on the Mac's sound, on every headset: parametric curve, Sonar presets, Bass / Voice / Treble, Boost, Smart Volume and Spatial Audio, for stereo and 5.1 / 7.1 sources;
@@ -29,7 +30,7 @@ macOS has no equivalent of PipeWire's virtual sinks and filter-chain. Splitting 
 Also not supported yet:
 
 - the GameBuds charging case;
-- re-applying settings after the Mac wakes from sleep. Replug the dongle if a setting is lost.
+- "Now playing" on the base's screen: it reads MPRIS, which macOS does not have.
 
 ## How it works
 
